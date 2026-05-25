@@ -22,6 +22,9 @@ the target project — it is the rig.
 | `prompts/issue-format.md`     | Canonical issue template |
 | `evals/`                      | One folder per eval run |
 | `scripts/new-eval.sh`         | Scaffold a new `evals/eval-NN/` directory |
+| `Dockerfile`                  | `claude-and-goose-runtime` image — goose + github-mcp-server + gh + git, non-root |
+| `scripts/run-recipe-in-container.sh` | Wrapper that runs a recipe inside the sandbox image |
+| `scripts/smoke-isolation.sh`  | Containment smoke test for the runtime image |
 
 ## Execution environment
 
@@ -34,24 +37,33 @@ Ollama host (`bazzite.local`):
 
 ## Running an eval
 
+Goose runs inside a sandboxed Docker container — see issue #4 for
+motivation. The host-side dependency is Docker Desktop and a PAT.
+
 1. A `goose-task` issue exists, is `ready-for-execution`, and has no
    open dependencies.
-2. Install Goose (see https://goose-docs.ai). Not installed by this
-   repo.
-3. Point Goose at this config and verify:
+2. Build the runtime image once (or after upgrading goose /
+   github-mcp-server):
    ```
-   export GOOSE_ADDITIONAL_CONFIG_FILES="$(pwd)/goose.yaml"
-   export GITHUB_PERSONAL_ACCESS_TOKEN=...   # for the github MCP extension
-   goose info -v                              # confirm provider/model/extensions resolved
+   docker build -t claude-and-goose-runtime .
+   ./scripts/smoke-isolation.sh   # optional, confirms containment
    ```
-4. Scaffold an eval directory and run the recipe:
+3. Export the PAT for the github MCP extension:
    ```
-   ./scripts/new-eval.sh 01
-   goose run --recipe recipes/execute-issue.yaml \
-     --params issue_number=1 \
-     | tee evals/eval-01/goose-session.log
+   export GITHUB_PERSONAL_ACCESS_TOKEN=...
    ```
-5. Write `evals/eval-01/result.md` (template scaffolded by the script).
+4. Scaffold an eval directory and run the recipe via the container
+   wrapper. The wrapper resolves `bazzite.local` on the host and
+   exports `OLLAMA_HOST` into the container, so mDNS doesn't need to
+   work from inside Docker.
+   ```
+   ./scripts/new-eval.sh 03
+   ./scripts/run-recipe-in-container.sh \
+     --recipe recipes/execute-issue.yaml \
+     --params issue_number=N \
+     | tee evals/eval-03/goose-session.log
+   ```
+5. Write `evals/eval-03/result.md` (template scaffolded by the script).
 
 ## Status
 
