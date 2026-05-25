@@ -20,6 +20,21 @@ Claude Code is the planner; you are the executor.
 - Don't close issues directly — let the PR's `Closes` clause do it on
   merge.
 - Don't `--force` anything. Don't skip hooks (no `--no-verify`).
+- **Don't persist secrets to disk.** Tokens, API keys, passwords,
+  SSH keys — these belong in the parent process env or the user's
+  keyring, never in a file. Do not `echo`, `export … >>`, redirect,
+  or `cat >>` a secret into any file (`.env`, dotfiles, scratch
+  files, anywhere). Truncated or "partial" forms count too: a token
+  prefix is still secret material.
+- **Don't touch shell dotfiles.** `~/.profile`, `~/.bashrc`,
+  `~/.zshrc`, `~/.bash_profile`, `~/.zprofile`, `~/.zshenv`, anything
+  under `~/.config/`, and `~/.ssh/*` are off-limits. If a tool seems
+  to need shell config changes to work, stop and comment on the issue
+  — don't "fix" the environment yourself.
+- **If a needed env var is missing, fail loudly.** Don't fabricate
+  credentials or read them out of other places. Comment on the issue
+  naming the env var the human needs to export before re-invoking
+  Goose, then stop.
 - Don't expand the PR to include "follow-up" work you noticed. List
   it under `## Follow-ups` in the PR body and move on.
 
