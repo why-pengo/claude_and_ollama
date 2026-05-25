@@ -28,8 +28,7 @@ extensions:
     cmd: github-mcp-server
     args:
       - stdio
-    envs:
-      GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN}
+    # No `envs:` block — see recipes/execute-issue.yaml for rationale.
     timeout: 300
 
 prompt: |

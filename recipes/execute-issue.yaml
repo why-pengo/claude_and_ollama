@@ -25,8 +25,9 @@ extensions:
     cmd: github-mcp-server
     args:
       - stdio
-    envs:
-      GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN}
+    # No `envs:` block — Goose's extension envs map doesn't expand
+    # ${VAR}, so values land literally. MCP stdio subprocess inherits
+    # parent env; export GITHUB_PERSONAL_ACCESS_TOKEN before `goose run`.
     timeout: 300
 
 prompt: |
