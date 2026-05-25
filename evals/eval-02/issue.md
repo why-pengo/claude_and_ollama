@@ -21,27 +21,27 @@ Re-run the same end-to-end workflow as eval-01, this time on top of the env-var 
   ```
   ./scripts/new-eval.sh 02
   goose run --recipe recipes/execute-issue.yaml \
-    --params issue_number= \
+    --params issue_number=<this issue's number> \
     | tee evals/eval-02/goose-session.log
   ```
 
 ## Subtasks
 - [ ] Read this issue end to end, plus the three files referenced in Context
-- [ ] Create branch `goose/issue--rerun-e2e` from `main`
+- [ ] Create branch `goose/issue-<N>-rerun-e2e` from `main`
 - [ ] Copy this issue's body **byte-for-byte verbatim** into `evals/eval-02/issue.md` — no reformatting, no added headers
 - [ ] Drive every GitHub operation (issue read, branch push, comment, PR open) through the **github MCP extension**. If a github MCP call fails, comment on this issue with the error and STOP. Do NOT silently fall back to `gh` CLI via the shell extension.
 - [ ] Write `evals/eval-02/result.md` containing: what ran, what worked, what didn't, a `Verdict: PASS | FAIL | PARTIAL` line, and 3 ideas for eval-03
 - [ ] Commit the eval-02 artifacts with a conventional-commit message
 - [ ] Comment on this issue with status (✅ / ⚠️ / ❌) and a link to the PR
-- [ ] Open a PR titled `eval: capture eval-02 (verify MCP auth fix)` whose body includes `Closes #`
+- [ ] Open a PR titled `eval: capture eval-02 (verify MCP auth fix)` whose body includes `Closes #<this issue>`
 
 ## Acceptance criteria
-- Branch `goose/issue--rerun-e2e` exists at `origin` with at least one commit
+- Branch `goose/issue-<N>-rerun-e2e` exists at `origin` with at least one commit
 - `evals/eval-02/issue.md`, `result.md`, and `goose-session.log` all exist
 - `result.md` contains a line beginning with `Verdict:` followed by `PASS`, `FAIL`, or `PARTIAL`
 - **No `gh ` invocations in `evals/eval-02/goose-session.log`** — verifiable with `grep -c '^\s*command:.*\bgh\b' evals/eval-02/goose-session.log` returning 0
 - **Every GitHub API call in the log is a `github__*` MCP tool call** (no shell-extension fallback for GitHub work)
-- A PR exists with `Closes #` in its body
+- A PR exists with `Closes #<this issue>` in its body
 - A comment from Goose appears on this issue with status + PR link
 
 ## Out of scope
@@ -49,3 +49,4 @@ Re-run the same end-to-end workflow as eval-01, this time on top of the env-var 
 - Moving to an external target repo (that's eval-03, requires a sandbox repo to exist first)
 - Tightening the recipe's verbatim-copy step (separate harness work — see eval-01 `result.md` "Next time" item 3)
 - Changing harness files outside `evals/eval-02/` during the run
+
