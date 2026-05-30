@@ -1,3 +1,4 @@
+![Claude and Goose](assets/cng.png)
 # claude_and_goose
 
 An evaluation harness for a two-agent code workflow:
