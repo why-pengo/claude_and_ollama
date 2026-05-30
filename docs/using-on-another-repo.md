@@ -19,7 +19,7 @@ For first runs on a new repo, stick to the proven class of task.
 
 ## Prerequisites
 
-1. **Bazzite + Ollama + qwen3.6 reachable.** No change from the existing setup. `./scripts/check-ollama.sh` confirms.
+1. **Bazzite + Ollama + qwen3.6 reachable.** No change from the existing setup. `./scripts/check-ollama.sh` shows what's loaded on the host — confirm `qwen3.6:latest` is in the list.
 2. **A PAT scoped to the target repo.** Fine-grained PAT, with these permissions:
    - Contents: Read and write
    - Issues: Read and write
@@ -48,20 +48,19 @@ Apply `goose-task` and `ready-for-execution` labels. If the target repo doesn't 
 
 ## Running the recipe against the target repo
 
-The recipe accepts a `repo` parameter (`owner/name`). The wrapper bind-mounts the *current* directory at `/work`, but Goose talks to GitHub through the MCP, so what's at `/work` doesn't really matter — `/work` is just where Goose lands when it shells out. You can run from the harness repo or from the target's working copy; both work.
+The recipe accepts a `repo` parameter (`owner/name`). The wrapper always bind-mounts **the harness repo itself** at `/work` (it resolves the git root containing the wrapper script, not your current directory), so you can invoke it from anywhere — but `/work` will be this repo. That's fine, because Goose talks to the target repo through MCP, not the local filesystem. The recipe and prompts only need to be reachable at `/work`, which they always are.
 
-From the harness repo, against another target:
+Pass both params on the same invocation — the wrapper supports repeating `--params`:
 
 ```
+ISSUE=42  # the target-repo issue number you want executed
 export GITHUB_PERSONAL_ACCESS_TOKEN=<PAT for target>
 ./scripts/run-recipe-in-container.sh \
   --recipe recipes/execute-issue.yaml \
-  --params issue_number=N \
+  --params issue_number=$ISSUE \
   --params repo=owner/target-repo \
-  | tee /tmp/goose-target-$N.log
+  | tee /tmp/goose-target-$ISSUE.log
 ```
-
-The wrapper currently doesn't take `--params` twice on the same command. If passing two params is awkward, edit the recipe's default `repo` value, or run the docker invocation directly — see `scripts/run-recipe-in-container.sh` for the exact shape.
 
 ## Reviewing the PR
 
