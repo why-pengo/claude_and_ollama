@@ -7,12 +7,13 @@
 set -euo pipefail
 
 HOST="${OLLAMA_HOST:-http://bazzite.local:11434}"
+HOST="${HOST%/}"
 URL="${HOST}/api/tags"
 
-body=$(curl -s -f --connect-timeout 5 "$URL" 2>&1) || {
+if ! body=$(curl -s -f --connect-timeout 5 "$URL"); then
   echo "Error: failed to reach Ollama host at ${URL}" >&2
   exit 1
-}
+fi
 
 echo "$body" | jq -r '
   .models[] | [
