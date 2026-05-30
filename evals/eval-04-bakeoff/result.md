@@ -6,6 +6,15 @@ Won by being the only model in the lineup that produced a PR. The
 other two failed at the tool-call protocol layer before doing any
 work.
 
+> **Update (#16 investigation):** the devstral failure documented
+> below did **not** reproduce on re-test — devstral now makes the
+> same `issue_read` call cleanly in the same recipe + container.
+> Likely cause was a cold-load + long-prompt timing flake against
+> Goose's default `OLLAMA_STREAM_TIMEOUT`. Mitigation landed in
+> `goose.yaml` (raised the timeout to 60s). qwen2.5-coder's failure
+> is a real Ollama Modelfile / chat-template issue and remains in
+> #16. Section below preserved as the original record.
+
 ## Summary
 
 | Model               | Total  | Outcome |

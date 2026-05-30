@@ -107,3 +107,23 @@ mismatch — worth investigating separately, not by re-scoring here.
 
 Same 6/15 numeric as qwen2.5-coder for the same reason: points-for-
 doing-nothing on dimensions 3 & 4 don't add up to a winner.
+
+> **Update (#16 investigation):** revisited on 2026-05-30. Direct
+> Ollama curl shows devstral emits a clean structured `tool_calls`
+> delta — identical shape to qwen3.6's. Re-running the same recipe
+> (`execute-issue.yaml --params issue_number=11`) in the same
+> container with `GOOSE_MODEL=devstral:latest`, devstral made the
+> `issue_read` tool call cleanly. The original failure didn't
+> reproduce.
+>
+> Most likely cause was a cold-load timing flake: devstral emits
+> only 2 deltas total (`tool_calls` + `done`) after inference
+> completes — no progressive content. Cold model load (~5.6s for
+> 14 GB) + 1280-token prompt eval = long silence before the first
+> delta, plausibly exceeding Goose's default `OLLAMA_STREAM_TIMEOUT`.
+> Mitigation: raised `OLLAMA_STREAM_TIMEOUT` to 60s in `goose.yaml`.
+>
+> So devstral is *not* structurally incompatible with the harness;
+> the 6/15 result here is a one-shot, not a reliable repro. A future
+> eval-NN could re-score devstral properly with the timeout fix in
+> place.

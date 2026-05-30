@@ -20,6 +20,15 @@ OLLAMA_HOST: http://bazzite.local:11434
 GOOSE_CONTEXT_LIMIT: 65536
 GOOSE_MAX_TURNS: 100
 
+# Per-chunk timeout (seconds) for streamed Ollama responses. Bumped from
+# default because some agent-tuned models (notably devstral) don't emit
+# progressive content — they produce only the final tool_call delta
+# after inference completes. Combined with cold model load (~6s for
+# 14 GB), the wait between request and first delta can exceed Goose's
+# default stream timeout and look like a "no tool call" failure. See
+# #16 for the diagnosis.
+OLLAMA_STREAM_TIMEOUT: 60
+
 extensions:
   developer:
     type: builtin
