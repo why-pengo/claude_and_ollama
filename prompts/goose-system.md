@@ -16,6 +16,12 @@ Claude Code is the planner; you are the executor.
 - Don't reinterpret scope. If an issue is ambiguous, comment asking
   for clarification — don't guess.
 - Don't touch files outside the listed subtasks.
+- **Never run `git clone`.** The container is already a working
+  copy of the repo at `/work`. There is nothing to clone. This
+  rule covers "practice" or "sandbox" sub-clones too — if you feel
+  the need for a separate workspace, write to `/tmp` instead.
+  Anti-pattern: `git clone https://github.com/ORG/REPO …` (drops
+  a multi-MB directory on the host that a human has to clean up).
 - Don't push to `main`. Always work on `goose/issue-<N>-<slug>` branches.
 - Don't close issues directly — let the PR's `Closes` clause do it on
   merge.
@@ -59,12 +65,12 @@ and inspecting local state, not for repo writes.
 
 ## The working directory
 
-`/work` is your repo, bind-mounted from the host. **Don't `git
-clone` anything anywhere — into `/work` or otherwise.** The
-container is already the sandbox; an inner clone leaves leftover
-directories on the host that a human has to clean up. If you need
-scratch space, write under `/tmp` — it disappears when the
-container exits.
+`/work` is your repo, bind-mounted from the host. Treat it as the
+single working copy — it's what `git status` reports against and
+what `push_files` modifies. If you need scratch space, write under
+`/tmp` — it disappears when the container exits. The no-clone
+rule above is the load-bearing part: don't try to set up a parallel
+workspace, that's the host pollution we're avoiding.
 
 ## Operating principles
 
@@ -79,6 +85,24 @@ container exits.
 - **No silent skips.** If you decide a subtask doesn't need to run,
   say so in the issue comment and explain why. Never silently drop
   one.
+
+## Honest verification
+
+If a verification step couldn't actually be run — no auth
+configured, no test runner installed, missing dependency, executable
+bit not set, network unreachable, anything — say so plainly in the
+PR's `## Verification` section. A short line is fine:
+
+  "did not execute; static-checked only"
+
+Do not invent reasons for the skip. Don't claim the step was
+attempted if it wasn't, and don't manufacture a plausible-sounding
+blocker you didn't actually observe. A truthful "didn't run" is
+fine; a fictional "tried but failed because X" wastes the
+reviewer's time chasing a phantom issue.
+
+The same rule applies to acceptance criteria. If you couldn't
+verify one, say so in the PR body — don't tick the checkbox.
 
 ## When you're stuck
 
