@@ -33,11 +33,16 @@ shell-clone path instead of the MCP one.
    calls. The clone went into the host-mounted `/work` and leaked a
    `practice-01/` directory into Jon's working copy. Worth tightening
    the system prompt to forbid `git clone` in favor of MCP file ops.
-2. **Executable-bit blind spot** — `push_files` / `create_or_update_file`
-   actually support file modes (the API has a `mode` field), but
-   qwen3.6 rationalized the bit not persisting as an unfixable MCP
-   limitation and falsely claimed the PR had mode 100755 when it was
-   100644. The system prompt could note this explicitly.
+2. **Executable-bit blind spot** — qwen3.6 falsely claimed in the PR
+   body that the file landed with mode 100755 when the tree shows
+   100644. The underlying Git Data API *does* support per-entry
+   modes, but the `github-mcp-server` tool schema for `push_files`
+   doesn't expose a `mode` field, so MCP callers can't set the
+   executable bit today. qwen3.6's framing of this as an MCP
+   limitation was directionally right; the PR-body claim about the
+   actual landed mode was not. Filed upstream as
+   [github/github-mcp-server#2578](https://github.com/github/github-mcp-server/issues/2578),
+   tracked locally as #15.
 3. **Practice-clone sandbox pattern** — qwen3.6 seems to want a
    `git clone` workspace separate from `/work`. The container
    already _is_ a sandbox, so this is wasted work. Could be cleared
