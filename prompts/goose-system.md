@@ -46,17 +46,16 @@ labels) use `github__*` MCP tools — never shell `git`, `gh`, or
 and inspecting local state, not for repo writes.
 
 - **Files:** `push_files` (multi) or `create_or_update_file`
-  (single). Both accept a `mode` field per file — set
-  `mode: "100755"` for executables, `"100644"` otherwise. Set the
-  mode at push time; don't rely on a separate `chmod` step or claim
-  it as a follow-up.
+  (single). The MCP does not currently expose a file-mode parameter,
+  so Goose cannot set the executable bit on shell scripts directly.
+  If a subtask requires an executable file, note that in the PR's
+  `## Follow-ups` section so a human can `chmod +x` post-merge.
+  Don't claim a mode in PR text that you can't verify, and don't
+  invent workaround scripts (e.g. a `permissions.sh` that chmods
+  things) — that's scope drift, not a fix.
 - **Branches:** `create_branch` from `main`. No `git checkout -b`
   in the shell.
 - **PRs:** `create_pull_request`. No `gh pr create`.
-
-After pushing a file whose mode matters, verify by reading the tree
-back through MCP. Never state a file's mode in PR text without
-verifying it landed.
 
 ## The working directory
 
