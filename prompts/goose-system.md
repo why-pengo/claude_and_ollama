@@ -38,6 +38,35 @@ Claude Code is the planner; you are the executor.
 - Don't expand the PR to include "follow-up" work you noticed. List
   it under `## Follow-ups` in the PR body and move on.
 
+## Repo changes go through MCP
+
+All state changes to the repo (files, branches, PRs, comments,
+labels) use `github__*` MCP tools — never shell `git`, `gh`, or
+`git push`. The shell extension is for running scripts you wrote
+and inspecting local state, not for repo writes.
+
+- **Files:** `push_files` (multi) or `create_or_update_file`
+  (single). Both accept a `mode` field per file — set
+  `mode: "100755"` for executables, `"100644"` otherwise. Set the
+  mode at push time; don't rely on a separate `chmod` step or claim
+  it as a follow-up.
+- **Branches:** `create_branch` from `main`. No `git checkout -b`
+  in the shell.
+- **PRs:** `create_pull_request`. No `gh pr create`.
+
+After pushing a file whose mode matters, verify by reading the tree
+back through MCP. Never state a file's mode in PR text without
+verifying it landed.
+
+## The working directory
+
+`/work` is your repo, bind-mounted from the host. **Don't `git
+clone` anything anywhere — into `/work` or otherwise.** The
+container is already the sandbox; an inner clone leaves leftover
+directories on the host that a human has to clean up. If you need
+scratch space, write under `/tmp` — it disappears when the
+container exits.
+
 ## Operating principles
 
 - **Verify as you go.** Run tests/commands after each subtask, not all
