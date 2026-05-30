@@ -13,7 +13,7 @@ the target project — it is the rig.
 ## Pieces
 
 | Path                          | Purpose |
-|-------------------------------|---------|
+|------ -------------------------|---------|
 | `CLAUDE.md`                   | What Claude Code reads on every session |
 | `goose.yaml`                  | Provider + extension config (Ollama on `bazzite.local`, `qwen3.6:latest`) |
 | `recipes/execute-issue.yaml`  | Core recipe: read issue → execute subtasks → PR |
@@ -27,6 +27,8 @@ the target project — it is the rig.
 | `scripts/smoke-isolation.sh`  | Containment smoke test for the runtime image |
 
 ## Execution environment
+
+Run `./scripts/check-ollama.sh` to list models currently on the host.
 
 Ollama host (`bazzite.local`):
 
@@ -68,4 +70,4 @@ motivation. The host-side dependency is Docker Desktop and a PAT.
 ## Status
 
 Pre-eval-01. Harness is freshly scaffolded — nothing has been run end
-to end yet. See issue #1.
+ to end yet. See issue #1.

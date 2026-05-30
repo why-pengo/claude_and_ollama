@@ -14,7 +14,7 @@ body=$(curl -s -f --connect-timeout 5 "$URL" 2>&1) || {
   exit 1
 }
 
-printf '%-30s %8s  %s  %s\n' NAME SIZE_GB PARAMETER_SIZE QUANTIZATION_LEVEL
+printf '%s\t%s\t%s\t%s\n' NAME SIZE_GB PARAMETER_SIZE QUANTIZATION_LEVEL
 echo "$body" | jq -r '
   .models[] | [
     .name,
