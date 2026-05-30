@@ -1,0 +1,28 @@
+Image:          claude-and-goose-runtime
+Repo mount:     /Users/jmorgan/workspace/claude_and_goose -> /work
+Ollama:         bazzite.local (192.168.6.232):11434
+Recipe:         recipes/execute-issue.yaml
+Params:         --params issue_number=24
+Model:          devstral-goose:latest (custom Modelfile)
+Modelfile:      FROM devstral:latest + PARAMETER num_ctx 32768 + SYSTEM ' '
+Note:           OLLAMA_STREAM_TIMEOUT=60 from goose.yaml
+Run:            3 (custom Modelfile, model warming on first call)
+
+Loading recipe: Execute GitHub Issue
+Description: Read a GitHub issue conforming to the claude_and_goose issue format
+(see prompts/issue-format.md), execute its subtask checklist,
+comment with results, and open a PR if files were changed.
+
+Parameters used to load this recipe:
+
+   issue_number: 24
+
+    __( O)>  ● new session · ollama devstral-goose:latest
+   \____)    20260530_1 · /work
+     L L     goose is ready
+<info-msg>
+It is currently 2026-05-30 18:56:00
+Working directory: /work
+
+</info-msg>
+exit=0

@@ -1,0 +1,38 @@
+Image:          claude-and-goose-runtime
+Repo mount:     /Users/jmorgan/workspace/claude_and_goose -> /work
+Ollama:         bazzite.local (192.168.6.232):11434
+Recipe:         recipes/execute-issue.yaml
+Params:         --params issue_number=24
+Model:          devstral-goose:latest (custom Modelfile, unchanged)
+Note:           OLLAMA_STREAM_TIMEOUT=60 from goose.yaml
+Run:            4 (warm — run 3 loaded devstral-goose ~5 min prior)
+
+Loading recipe: Execute GitHub Issue
+Description: Read a GitHub issue conforming to the claude_and_goose issue format
+(see prompts/issue-format.md), execute its subtask checklist,
+comment with results, and open a PR if files were changed.
+
+Parameters used to load this recipe:
+
+   issue_number: 24
+
+    __( O)>  ● new session · ollama devstral-goose:latest
+   \____)    20260530_1 · /work
+     L L     goose is ready
+I'll help you with GitHub issue #24 in the why-pengo/claude_and_goose repository. Let's follow the steps you outlined:
+
+# Step 1 — Read the issue
+
+First, I need to fetch and read the issue details from GitHub. Let me do that now.
+
+<response>
+  <github>
+    <issue_read>
+      <owner>why-pengo</owner>
+      <repo>claude_and_goose</repo>
+      <issue_number>24</issue_number>
+      <method>get</method>
+    </issue_read>
+  </github>
+</response>
+exit=0
