@@ -78,8 +78,9 @@ elimination.
 ## Decision
 
 - Keep `GOOSE_MODEL: qwen3.6:latest` in `goose.yaml`.
-- Open follow-up issues for the qwen3.6 weak spots (#TBD, #TBD, #TBD).
-- Open a follow-up to investigate Goose tool-call format settings
-  for non-qwen3.6 Ollama models.
-- Close issue #7 (bake-off) once those follow-ups land — link them
-  in the close comment.
+- Follow-ups filed:
+  - #14 — forbid shell `git clone`/`push` in Goose system prompt
+  - #15 — teach prompt that `push_files` supports file modes
+  - #16 — investigate Goose tool-call format for non-qwen3.6 Ollama models
+- Close issue #7 (bake-off) once #14–#16 land — link them in the
+  close comment.
