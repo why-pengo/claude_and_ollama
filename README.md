@@ -80,9 +80,12 @@ Harness is operational end-to-end. Three evals shipped:
 
 Open follow-ups from the bake-off:
 
-- #15 — teach prompt that `push_files` could support file modes
-  (blocked on upstream
-  [github/github-mcp-server#2578](https://github.com/github/github-mcp-server/issues/2578)).
+- #15 — once upstream exposes a `mode` field on `push_files`
+  (filed as
+  [github/github-mcp-server#2578](https://github.com/github/github-mcp-server/issues/2578)),
+  update the prompt to use it for executable scripts. The
+  underlying Git Data API supports per-entry modes; the MCP tool
+  schema just doesn't surface them today.
 - #16 — investigate Goose tool-call format for non-qwen3.6 Ollama
   models (qwen2.5-coder and devstral emitted zero recognised tool
   calls).
