@@ -1,0 +1,20 @@
+Image:          claude-and-goose-runtime
+Repo mount:     /Volumes/Crucial_X9/workspace/claude_and_goose -> /work
+Ollama:         bazzite.local (192.168.6.232):11434
+Recipe:         recipes/execute-issue.yaml
+Params:         --params issue_number=11
+
+Loading recipe: Execute GitHub Issue
+Description: Read a GitHub issue conforming to the claude_and_goose issue format
+(see prompts/issue-format.md), execute its subtask checklist,
+comment with results, and open a PR if files were changed.
+
+Parameters used to load this recipe:
+
+   issue_number: 11
+
+    __( O)>  ● new session · ollama qwen2.5-coder:32b
+   \____)    20260530_1 · /work
+     L L     goose is ready
+{"name": "github__issue_read", "arguments": {"method": "get", "owner": "why-pengo", "repo": "claude_and_goose", "issue_number": 11}}
+./scripts/run-recipe-in-container.sh --recipe recipes/execute-issue.yaml    0.01s user 0.01s system 0% cpu 16.741 total
