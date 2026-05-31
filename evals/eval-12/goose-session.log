@@ -1,0 +1,925 @@
+Image:          claude-and-goose-runtime
+Repo mount:     /Volumes/Crucial_X9/workspace/claude_and_goose -> /work
+Ollama:         bazzite.local (192.168.6.232):11434
+Recipe:         recipes/execute-issue.yaml
+Base branch:    develop (resolved from why-pengo/health_track)
+Params:         --params issue_number=51 --params repo=why-pengo/health_track --params base_branch=develop
+
+   base_branch: develop
+   repo: why-pengo/health_track
+   issue_number: 51
+Loading recipe: Execute GitHub Issue
+Description: Read a GitHub issue conforming to the claude_and_goose issue format
+(see prompts/issue-format.md), execute its subtask checklist,
+comment with results, and open a PR if files were changed.
+
+Parameters used to load this recipe:
+
+
+    __( O)>  ● new session · ollama qwen3.6:latest
+   \____)    20260531_1 · /work
+     L L     goose is ready
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat /work/prompts/goose-system.md 2>/dev/null || echo "File not found at /work/prompts/goose-system.md"
+
+
+  ────────────────────────────────────────
+  ▸ issue_read github
+    method: get
+    issue_number: 51
+    owner: why-pengo
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: AGENTS.md
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/AGENTS.md
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: frontend/AGENTS.md
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: docs/AGENTS.md
+    repo: health_track
+
+# Goose System Prompt — claude_and_goose
+
+You are the execution agent for the `claude_and_goose` harness.
+Claude Code is the planner; you are the executor.
+
+## What you do
+
+- Read GitHub issues authored to the spec in `prompts/issue-format.md`.
+- Execute the subtask checklist **in order**, one item at a time.
+- Verify every acceptance criterion before opening a PR.
+- Comment on the issue with status; open a PR with `Closes #N` if
+  files changed.
+
+## What you don't do
+
+- Don't reinterpret scope. If an issue is ambiguous, comment asking
+  for clarification — don't guess.
+- Don't touch files outside the listed subtasks.
+- **Never run `git clone`.** The container is already a working
+  copy of the repo at `/work`. There is nothing to clone. This
+  rule covers "practice" or "sandbox" sub-clones too — if you feel
+  the need for a separate workspace, write to `/tmp` instead.
+  Anti-pattern: `git clone https://github.com/ORG/REPO …` (drops
+  a multi-MB directory on the host that a human has to clean up).
+- Don't push to the integration branch directly (the recipe names
+  it; usually `main` for the harness, `develop` for repos that use
+  the `feature/* → develop → main` workflow). Always work on
+  `goose/issue-<N>-<slug>` branches off the integration branch.
+- Don't close issues directly — let the PR's `Closes` clause do it on
+  merge.
+- Don't `--force` anything. Don't skip hooks (no `--no-verify`).
+- **Don't persist secrets to disk.** Tokens, API keys, passwords,
+  SSH keys — these belong in the parent process env or the user's
+  keyring, never in a file. Do not `echo`, `export … >>`, redirect,
+  or `cat >>` a secret into any file (`.env`, dotfiles, scratch
+  files, anywhere). Truncated or "partial" forms count too: a token
+  prefix is still secret material.
+- **Don't touch shell dotfiles.** `~/.profile`, `~/.bashrc`,
+  `~/.zshrc`, `~/.bash_profile`, `~/.zprofile`, `~/.zshenv`, anything
+  under `~/.config/`, and `~/.ssh/*` are off-limits. If a tool seems
+  to need shell config changes to work, stop and comment on the issue
+  — don't "fix" the environment yourself.
+- **If a needed env var is missing, fail loudly.** Don't fabricate
+  credentials or read them out of other places. Comment on the issue
+  naming the env var the human needs to export before re-invoking
+  Goose, then stop.
+- Don't expand the PR to include "follow-up" work you noticed. List
+  it under `## Follow-ups` in the PR body and move on.
+
+## Repo changes go through MCP
+
+All state changes to the repo (files, branches, PRs, comments,
+labels) use `github__*` MCP tools — never shell `git`, `gh`, or
+`git push`. The shell extension is for running scripts you wrote
+and inspecting local state, not for repo writes.
+
+- **Files:** `push_files` (multi) or `create_or_update_file`
+  (single). The MCP does not currently expose a file-mode parameter,
+  so Goose cannot set the executable bit on shell scripts directly.
+  If a subtask requires an executable file, note that in the PR's
+  `## Follow-ups` section so a human can `chmod +x` post-merge.
+  Don't claim a mode in PR text that you can't verify, and don't
+  invent workaround scripts (e.g. a `permissions.sh` that chmods
+  things) — that's scope drift, not a fix.
+- **Branches:** `create_branch` from the integration branch the
+  recipe specifies (passed as `{{ base_branch }}` and templated
+  into the prompt). Don't hard-code `main` — many repos use
+  `develop` as integration and the recipe will pass that value
+  through. No `git checkout -b` in the shell.
+- **PRs:** `create_pull_request`. No `gh pr create`.
+
+## Adding new files — match the neighbors
+
+When you push a file the repo doesn't already have, place it next to
+an existing sibling of the same type. Concrete checks:
+
+- Adding `*_test.py`, `test_*.py`, or `*.test.ts`? Find one existing
+  test in the repo first (`get_file_contents` on the closest one
+  you know exists) and use the same directory. If `backend/tests/`
+  has `conftest.py`, your new test goes there too — not at the
+  repo root.
+- Adding a module under `app/`, `src/`, or similar? Read one of the
+  existing siblings to confirm the directory exists at that exact
+  path. `backend/app/models/` is not the same as `app/models/`.
+- The PR body's file list must match what was actually pushed.
+  Don't describe `backend/tests/foo.py` in the body if you pushed
+  `tests/foo.py`.
+
+A path slip on a single file invalidates the entire change set —
+the test won't be discovered, the import path won't resolve, the
+migration won't run. Treat path correctness as part of acceptance,
+not a detail.
+
+## Issue numbers and PR numbers are different namespaces
+
+Both look like `#N`. They are not interchangeable. The issue you
+are executing has a number; the PR you open (or have already
+opened) has a different number from a different counter.
+
+- `issue_read`, `add_issue_comment`, `issue_write` take the
+  **issue** number.
+- `update_pull_request`, `pull_request_read`, `merge_pull_request`
+  take the **PR** number — the value returned by `create_pull_request`,
+  or visible from `list_pull_requests`. (`create_pull_request` itself
+  creates a PR and *returns* the number; it doesn't take one as input.)
+- If you haven't called `create_pull_request` yet in this session,
+  you have no PR number to update. Don't pass the issue number
+  hoping the API treats them as the same.
+
+## The working directory
+
+`/work` is your repo, bind-mounted from the host. Treat it as the
+single working copy — it's what `git status` reports against and
+what `push_files` modifies. If you need scratch space, write under
+`/tmp` — it disappears when the container exits. The no-clone
+rule above is the load-bearing part: don't try to set up a parallel
+workspace, that's the host pollution we're avoiding.
+
+## Operating principles
+
+- **Verify as you go.** Run tests/commands after each subtask, not all
+  at the end.
+- **Stop on failure.** If a subtask fails twice, stop and comment on
+  the issue with what you tried. Don't loop.
+- **Small, labelled commits.** One subtask, one commit, conventional
+  prefix (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`).
+- **One issue, one PR.** Don't fold multiple issues into a single PR
+  unless explicitly told to.
+- **No silent skips.** If you decide a subtask doesn't need to run,
+  say so in the issue comment and explain why. Never silently drop
+  one.
+
+## Honest verification
+
+If a verification step couldn't actually be run — no auth
+configured, no test runner installed, missing dependency, executable
+bit not set, network unreachable, anything — say so plainly in the
+PR's `## Verification` section. A short line is fine:
+
+  `did not execute; static-checked only`
+
+Do not invent reasons for the skip. Don't claim the step was
+attempted if it wasn't, and don't manufacture a plausible-sounding
+blocker you didn't actually observe. A truthful "didn't run" is
+fine; a fictional "tried but failed because X" wastes the
+reviewer's time chasing a phantom issue.
+
+The same rule applies to acceptance criteria. If you couldn't
+verify one, say so in the PR body — don't tick the checkbox.
+
+## When you're stuck
+
+Comment on the issue with:
+- What you were trying to do
+- What you tried
+- What you observed
+- What input you need to proceed
+
+Then stop. A human will unblock you.All AGENTS.md files are 404 — no additional guidance. The issue has all required sections (Goal, Context, Subtasks, Acceptance criteria, Out of scope). Let me now explore the repo and fetch referenced files.
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/services/analytics.py
+    repo: health_track
+
+Now let me read the sleep router (for the registration pattern) and existing schemas.
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/routers/sleep.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/routers/hydration.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/schemas/hydration.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/main.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/tests/test_sleep.py
+    repo: health_track
+
+Good. Now let me check the existing schemas pattern and conftest for tests.
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/schemas
+    repo: health_track
+
+Now let me check the conftest and an existing schema for the Pydantic pattern.
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/tests/conftest.py
+    repo: health_track
+
+Now I have all the context I need. Let me create the branch and start implementing.
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/schemas/sleep.py
+    repo: health_track
+
+All issue sections present. I have full context. Let me create the branch and implement all subtasks.
+  ────────────────────────────────────────
+  ▸ create_branch github
+    branch: goose/issue-51-daily-hydration
+    from_branch: develop
+    owner: why-pengo
+    repo: health_track
+
+Now I'll implement all subtasks. Let me start by creating the schema file and the router file in parallel, then update the service and main.py.
+  ────────────────────────────────────────
+  ▸ create_or_update_file github
+    branch: goose/issue-51-daily-hydration
+    content: from datetime import date
+
+from pydantic import BaseModel
+
+
+class HydrationDaily(BaseModel):
+    """One row per day, combining all 5 hydration metrics."""
+
+    date: date
+    water_oz: float | None
+    sodium_mg: int | None
+    potassium_mg: int | None
+    calcium_mg: int | None
+    magnesium_mg: int | None
+
+    message: feat: add HydrationDaily schema for daily hydration metrics
+
+    owner: why-pengo
+    path: backend/app/schemas/hydration.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ create_or_update_file github
+    branch: goose/issue-51-daily-hydration
+    content: import math
+from datetime import date
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.schemas.analyticshydration import HydrationDaily
+from app.services.analyticshydration import get_daily_series
+
+
+_AZ = 29.5735  # mL per fluid ounce
+
+
+async def get_hydration_daily(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[HydrationDaily]:
+    """Return one row per date covering all 5 hydration metrics.
+
+    Reuses ``get_daily_series`` for each of the 5 type keys,
+    indexes by date, merges, and converts mL → fl-oz for water.
+    """
+    type_keys = [
+        "dietary_water",
+        "sodium",
+        "potassium",
+        "calcium",
+        "magnesium",
+    ]
+
+    # Fetch all 5 series in parallel
+    series_map: dict[str, list] = {}
+    for tk in type_keys:
+        summary_list = await get_daily_series(session, tk, date_from, date_to, include_sum=True)
+        series_map[tk] = {s.date.isoformat(): s for s in summary_list}
+
+    # Collect all dates across all metrics
+    all_dates: set[str] = set()
+    for s in series_map.values():
+        all_dates.update(s.keys())
+
+    if not all_dates:
+        return []
+
+    water_entries = series_map.pop("dietary_water")
+    merged: list[HydrationDaily] = []
+    for day_str in sorted(all_dates):
+        date_obj = date.fromisoformat(day_str)
+
+        # water_oz: mL → fl-oz, rounded to 1dp
+        water_val = water_entries.get(day_str)
+        water_oz: float | None = None
+        if water_val is not None and water_val.sum_value is not None:
+            water_oz = round(water_val.sum_value / _AZ, 1)
+
+        def _mg_sum(tk: str) -> int | None:
+            entry = series_map.get(tk, {}).get(day_str)
+            if entry is not None and entry.sum_value is not None:
+                return round(entry.sum_value)
+            return None
+
+        merged.append(
+            HydrationDaily(
+                date=date_obj,
+                water_oz=water_oz,
+                sodium_mg=_mg_sum("sodium"),
+                potassium_mg=_mg_sum("potassium"),
+                calcium_mg=_mg_sum("calcium"),
+                magnesium_mg=_mg_sum("magnesium"),
+            )
+        )
+
+    return merged
+
+    owner: why-pengo
+    path: backend/app/services/hydration.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ create_or_update_file github
+    branch: goose/issue-51-daily-hydration
+    content: from datetime import date
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.schemas.hydration import HydrationDaily
+from app.services.analytics import get_daily_series
+
+
+_AZ = 29.5735  # mL per fluid ounce
+
+
+async def get_hydration_daily(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[HydrationDaily]:
+    """Return one row per date covering all 5 hydration metrics.
+
+    Reuses ``get_daily_series`` for each of the 5 type keys,
+    indexes by date, merges, and converts mL → fl-oz for water.
+    """
+    type_keys = [
+        "dietary_water",
+        "sodium",
+        "potassium",
+        "calcium",
+        "magnesium",
+    ]
+
+    # Fetch all 5 series in parallel
+    series_map: dict[str, dict] = {}
+    for tk in type_keys:
+        summary_list = await get_daily_series(session, tk, date_from, date_to, include_sum=True)
+        series_map[tk] = {s.date.isoformat(): s for s in summary_list}
+
+    # Collect all dates across all metrics
+    all_dates: set[str] = set()
+    for s in series_map.values():
+        all_dates.update(s.keys())
+
+    if not all_dates:
+        return []
+
+    water_entries = series_map.pop("dietary_water")
+    merged: list[HydrationDaily] = []
+    for day_str in sorted(all_dates):
+        date_obj = date.fromisoformat(day_str)
+
+        # water_oz: mL → fl-oz, rounded to 1dp
+        water_val = water_entries.get(day_str)
+        water_oz: float | None = None
+        if water_val is not None and water_val.sum_value is not None:
+            water_oz = round(water_val.sum_value / _AZ, 1)
+
+        def _mg_sum(tk: str) -> int | None:
+            entry = series_map.get(tk, {}).get(day_str)
+            if entry is not None and entry.sum_value is not None:
+                return round(entry.sum_value)
+            return None
+
+        merged.append(
+            HydrationDaily(
+                date=date_obj,
+                water_oz=water_oz,
+                sodium_mg=_mg_sum("sodium"),
+                potassium_mg=_mg_sum("potassium"),
+                calcium_mg=_mg_sum("calcium"),
+                magnesium_mg=_mg_sum("magnesium"),
+            )
+        )
+
+    return merged
+
+    message: feat: add get_hydration_daily service combining all 5 hydration metrics
+
+    owner: why-pengo
+    path: backend/app/services/hydration.py
+    repo: health_track
+
+Wait, I notice a closure bug with `_mg_sum`. Let me fix the service.
+  ────────────────────────────────────────
+  ▸ create_or_update_file github
+    branch: goose/issue-51-daily-hydration
+    content: from datetime import date
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.schemas.hydration import HydrationDaily
+from app.services.analytics import get_daily_series
+
+
+_AZ = 29.5735  # mL per fluid ounce
+
+
+def _mg_sum(entry: object) -> int | None:
+    if entry is not None and entry.sum_value is not None:
+        return round(entry.sum_value)
+    return None
+
+
+async def get_hydration_daily(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[HydrationDaily]:
+    """Return one row per date covering all 5 hydration metrics.
+
+    Reuses ``get_daily_series`` for each of the 5 type keys,
+    indexes by date, merges, and converts mL → fl-oz for water.
+    """
+    type_keys = [
+        "dietary_water",
+        "sodium",
+        "potassium",
+        "calcium",
+        "magnesium",
+    ]
+
+    # Fetch all 5 series in parallel
+    series_map: dict[str, dict] = {}
+    for tk in type_keys:
+        summary_list = await get_daily_series(session, tk, date_from, date_to, include_sum=True)
+        series_map[tk] = {s.date.isoformat(): s for s in summary_list}
+
+    # Collect all dates across all metrics
+    all_dates: set[str] = set()
+    for s in series_map.values():
+        all_dates.update(s.keys())
+
+    if not all_dates:
+        return []
+
+    water_entries = series_map.pop("dietary_water")
+    merged: list[HydrationDaily] = []
+    for day_str in sorted(all_dates):
+        date_obj = date.fromisoformat(day_str)
+
+        # water_oz: mL → fl-oz, rounded to 1dp
+        water_val = water_entries.get(day_str)
+        water_oz: float | None = None
+        if water_val is not None and water_val.sum_value is not None:
+            water_oz = round(water_val.sum_value / _AZ, 1)
+
+        merged.append(
+            HydrationDaily(
+                date=date_obj,
+                water_oz=water_oz,
+                sodium_mg=_mg_sum(series_map.get("sodium", {}).get(day_str)),
+                potassium_mg=_mg_sum(series_map.get("potassium", {}).get(day_str)),
+                calcium_mg=_mg_sum(series_map.get("calcium", {}).get(day_str)),
+                magnesium_mg=_mg_sum(series_map.get("magnesium", {}).get(day_str)),
+            )
+        )
+
+    return merged
+
+    message: fix: eliminate closure bug in _mg_sum helper
+
+    owner: why-pengo
+    path: backend/app/services/hydration.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /work && git rev-parse goose/issue-51-daily-hydration:backend/app/services/hydration.py
+
+fatal: invalid object name 'goose/issue-51-daily-hydration'.
+goose/issue-51-daily-hydration:backend/app/services/hydration.py
+
+Command exited with code 128
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /work && git fetch origin && git branch -a
+
+error: cannot run ssh: No such file or directory
+fatal: unable to fork
+
+Command exited with code 128
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /work && git branch -v && git status
+
+  docs/branch-protection-claudemd 06c0eb0 docs: document branch protection rules in CLAUDE.md
+* experiment/qwen3.6-128k-context e686940 docs: capture eval-10 + eval-11 — PR #44 validation evidence (#46)
+  fix/goose-prompt-mcp-rules      215ac56 fix: drop false push_files mode claim; document MCP limitation
+  goose/issue--rerun-e2e          1a5cd24 [gone] docs: append final session log delta for eval-02
+  goose/issue-1-validate-e2e      cefd26a [gone] fix: make issue.md byte-for-byte verbatim with issue #1 body
+  goose/issue-28-post-run-check   bfe209e feat: add scripts/post-run-check.sh to verify goose-run side effects
+  main                            e686940 docs: capture eval-10 + eval-11 — PR #44 validation evidence (#46)
+On branch experiment/qwen3.6-128k-context
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   goose.yaml
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	evals/eval-12/
+
+no changes added to commit (use "git add" and/or "git commit -a")
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /work/health_track && git branch -v && git status
+
+bash: line 1: cd: /work/health_track: No such file or directory
+
+Command exited with code 1Let me verify what we have on the branch so far and continue.
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/services/hydration.py
+    ref: refs/heads/goose/issue-51-daily-hydration
+    repo: health_track
+
+I see the closure bug in the service file — `_mg_sum` is defined inside the loop. Let me fix that properly.
+  ────────────────────────────────────────
+  ▸ create_or_update_file github
+    branch: goose/issue-51-daily-hydration
+    content: from datetime import date
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.schemas.hydration import HydrationDaily
+from app.services.analytics import get_daily_series
+
+
+_AZ = 29.5735  # mL per fluid ounce
+
+
+def _mg_sum(result: object) -> int | None:
+    if result is not None and result.sum_value is not None:
+        return round(result.sum_value)
+    return None
+
+
+async def get_hydration_daily(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[HydrationDaily]:
+    """Return one row per date covering all 5 hydration metrics.
+
+    Reuses ``get_daily_series`` for each of the 5 type keys,
+    indexes by date, merges, and converts mL → fl-oz for water.
+    """
+    type_keys = [
+        "dietary_water",
+        "sodium",
+        "potassium",
+        "calcium",
+        "magnesium",
+    ]
+
+    # Fetch all 5 series in parallel
+    series_map: dict[str, dict] = {}
+    for tk in type_keys:
+        summary_list = await get_daily_series(session, tk, date_from, date_to, include_sum=True)
+        series_map[tk] = {s.date.isoformat(): s for s in summary_list}
+
+    # Collect all dates across all metrics
+    all_dates: set[str] = set()
+    for s in series_map.values():
+        all_dates.update(s.keys())
+
+    if not all_dates:
+        return []
+
+    water_entries = series_map.pop("dietary_water")
+    merged: list[HydrationDaily] = []
+    for day_str in sorted(all_dates):
+        date_obj = date.fromisoformat(day_str)
+
+        # water_oz: mL → fl-oz, rounded to 1dp
+        water_val = water_entries.get(day_str)
+        water_oz: float | None = None
+        if water_val is not None and water_val.sum_value is not None:
+            water_oz = round(water_val.sum_value / _AZ, 1)
+
+        merged.append(
+            HydrationDaily(
+                date=date_obj,
+                water_oz=water_oz,
+                sodium_mg=_mg_sum(series_map.get("sodium", {}).get(day_str)),
+                potassium_mg=_mg_sum(series_map.get("potassium", {}).get(day_str)),
+                calcium_mg=_mg_sum(series_map.get("calcium", {}).get(day_str)),
+                magnesium_mg=_mg_sum(series_map.get("magnesium", {}).get(day_str)),
+            )
+        )
+
+    return merged
+
+    message: fix: move _mg_sum outside loop to avoid closure-in-loop warning
+
+    owner: why-pengo
+    path: backend/app/services/hydration.py
+    repo: health_track
+    sha: 692552a87329d64dd87c3d18258c1bdc786bce02
+
+Good, the service fix is in. Now let me push the router file and update main.py.
+  ────────────────────────────────────────
+  ▸ create_or_update_file github
+    branch: goose/issue-51-daily-hydration
+    content: from datetime import date
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth import get_current_user
+from app.database import get_db
+from app.schemas.hydration import HydrationDaily
+from app.services import hydration as hydration_service
+
+router = APIRouter(prefix="/api/hydration", tags=["hydration"])
+
+
+@router.get("/daily", response_model=list[HydrationDaily])
+async def get_daily_hydration(
+    date_from: date | None = Query(None, alias="from"),
+    date_to: date | None = Query(None, alias="to"),
+    _: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[HydrationDaily]:
+    return await hydration_service.get_hydration_daily(db, date_from, date_to)
+
+    message: feat: add /api/hydration/daily endpoint combining all 5 metrics
+
+    owner: why-pengo
+    path: backend/app/routers/hydration.py
+    repo: health_track
+
+Now I need to update `main.py` to import and register the hydration router.
+  ────────────────────────────────────────
+  ▸ edit
+    path backend/app/main.py
+    before: from app.routers import bp as bp_router  # noqa: E402
+from app.routers import dashboard as dashboard_router  # noqa: E402
+from app.routers import export as export_router  # noqa: E402
+from app.routers import hydration_goals as hydration_goals_router  # noqa: E402
+    after: from app.routers import bp as bp_router  # noqa: E402
+from app.routers import dashboard as dashboard_router  # noqa: E402
+from app.routers import export as export_router  # noqa: E402
+from app.routers import hydration_goals as hydration_goals_router  # noqa: E402
+from app.routers import hydration as hydration_router  # noqa: E402
+
+Failed to read backend/app/main.py: No such file or directory (os error 2)
+  ────────────────────────────────────────
+  ▸ edit
+    path backend/app/main.py
+    before: from app.routers import bp as bp_router  # noqa: E402
+from app.routers import dashboard as dashboard_router  # noqa: E402
+from app.routers import export as export_router  # noqa: E402
+from app.routers import hydration_goals as hydration_goals_router  # noqa: E402
+    after: from app.routers import bp as bp_router  # noqa: E402
+from app.routers import dashboard as dashboard_router  # noqa: E402
+from app.routers import export as export_router  # noqa: E402
+from app.routers import hydration_goals as hydration_goals_router  # noqa: E402
+from app.routers import hydration as hydration_router  # noqa: E402
+    repo: health_track
+
+Failed to read backend/app/main.py: No such file or directory (os error 2)
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/main.py
+    ref: refs/heads/develop
+    repo: health_track
+
+Now I have main.py content and its SHA. Let me update it to import and register the new hydration router.
+  ────────────────────────────────────────
+  ▸ create_or_update_file github
+    branch: goose/issue-51-daily-hydration
+    content: import logging
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.database import Base, engine
+
+logger = logging.getLogger(__name__)
+
+APP_VERSION = "0.1.0"
+MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
+
+
+# ---------------------------------------------------------------------------
+# Request size limit middleware
+# ---------------------------------------------------------------------------
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_UPLOAD_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "File too large"},
+            )
+        return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# Security headers middleware (added AFTER CORS)
+# ---------------------------------------------------------------------------
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # No HSTS — local deployment without HTTPS
+        return response
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    data_dir = os.getenv("DATA_DIR", "./data")
+    os.makedirs(data_dir, exist_ok=True)
+
+    db_path = os.path.join(data_dir, "health.db")
+    if os.path.exists(db_path):
+        size_mb = os.path.getsize(db_path) / (1024 * 1024)
+        logger.info(
+            "Health Tracker v%s starting — DATA_DIR=%s, database found, size: %.2f MB",
+            APP_VERSION,
+            data_dir,
+            size_mb,
+        )
+    else:
+        logger.info(
+            "Health Tracker v%s starting — DATA_DIR=%s, database not found",
+            APP_VERSION,
+            data_dir,
+        )
+
+    # Create tables (Alembic handles migrations in production)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    if not os.path.exists(db_path):
+        logger.info("Database initialised")
+    else:
+        logger.info("Database ready")
+
+    yield
+
+    await engine.dispose()
+
+
+app = FastAPI(title="Health Tracker", version=APP_VERSION, lifespan=lifespan)
+
+_raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+origins = [o.strip() for o in _raw_origins.split(",")]
+
+# CORS must come before security headers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# Size limit and security headers added after CORS
+app.add_middleware(RequestSizeLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+
+from app.routers import activity_goals as activity_goals_router  # noqa: E402
+from app.routers import auth as auth_router  # noqa: E402
+from app.routers import backup as backup_router  # noqa: E402
+from app.routers import bp as bp_router  # noqa: E402
+from app.routers import dashboard as dashboard_router  # noqa: E402
+from app.routers import export as export_router  # noqa: E402
+from app.routers import hydration_goals as hydration_goals_router  # noqa: E402
+from app.routers import hydration as hydration_router  # noqa: E402
+from app.routers import import_ as import_router  # noqa: E402
+from app.routers import medications as medications_router  # noqa: E402
+from app.routers import profile as profile_router  # noqa: E402
+from app.routers import records as records_router  # noqa: E402
+from app.routers import sleep as sleep_router  # noqa: E402
+from app.routers import workouts as workouts_router  # noqa: E402
+
+app.include_router(auth_router.router)
+app.include_router(import_router.router)
+app.include_router(bp_router.router)
+app.include_router(medications_router.router)
+app.include_router(dashboard_router.router)
+app.include_router(records_router.router)
+app.include_router(workouts_router.router)
+app.include_router(export_router.router)
+app.include_router(backup_router.router)
+app.include_router(profile_router.router)
+app.include_router(activity_goals_router.router)
+app.include_router(hydration_goals_router.router)
+app.include_router(hydration_router.router)
+app.include_router(sleep_router.router)
+
+# TESTING-only endpoints: registered at startup only when TESTING=true.
+# This ensures the test reset endpoint is NEVER available in production.
+if os.getenv("TESTING") == "true":
+    from app.routers import test_helpers as test_helpers_router  # noqa: E402
+
+    app.include_router(test_helpers_router.router)
+
+
+@app.get("/health", tags=["meta"])
+async def health_check():
+    return {"status": "ok"}
+
+    message: feat: register hydration router in main.py for /api/hydration/daily endpoint
+
+    owner: why-pengo
+    path: backend/app/main.py
+    repo: health_track
+    sha: 7ae66cdbca770065eef862590dc80bfe44de4e23
+
+Good, main.py is updated. Now I need to check on the analytics service to verify the `get_daily_series` function exists and understand its interface.

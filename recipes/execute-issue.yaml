@@ -92,21 +92,35 @@ prompt: |
   Run every observable check listed under Acceptance criteria. If any
   fail, fix and re-verify before opening the PR.
 
-  # Step 5 — Open the PR (only if files changed)
+  # Step 5 — Open the PR
+
+  The moment your last file is pushed in Step 3, call `create_pull_request`.
+  Don't ask, don't defer, don't decide whether — just do it. This is how
+  the issue closes. Skipping it means a human has to come behind you and
+  clean up an orphan branch.
+
   Title: match the issue title.
   Body must include, in this order:
     - `Closes #{{ issue_number }}`
     - `## Summary` — what changed, 2–4 bullets
     - `## Verification` — each acceptance criterion and how you
       confirmed it
-    - `## Subtasks` — mirror of the issue checklist, all checked
+    - `## Subtasks` — mirror of the issue checklist. Tick only items
+      you actually executed; leave others unchecked with a one-line
+      note. Don't tick a box for "verified by reading the file" —
+      reading isn't running.
     - `## Follow-ups` (optional) — anything out of scope you noticed
 
   # Step 6 — Comment on the issue
-  Post a comment on #{{ issue_number }} with:
+
+  Immediately after `create_pull_request` returns, call
+  `add_issue_comment` on #{{ issue_number }} with:
     - Status: ✅ done | ⚠️ partial | ❌ blocked
     - Link to the PR (or to the branch if nothing changed)
     - Anything surprising
+
+  Steps 5 and 6 are **not optional** if you pushed any files. The run
+  isn't done until both have fired.
 
   # Rules
   - Never close the issue directly — `Closes` on the PR does that on merge.
