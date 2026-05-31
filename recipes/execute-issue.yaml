@@ -51,24 +51,18 @@ prompt: |
   — many repos use `develop` (Jon's standard workflow does).
 
   # Step 0 — Load target-repo guidance
-  Before reading the issue, try to fetch any `AGENTS.md` files from
-  the target via `get_file_contents`. These are optional — a 404
-  just means the target hasn't published agent guidance, in which
-  case skip silently. Paths to attempt:
+  Try `get_file_contents` for each of these paths (404 = skip silently;
+  do not stop after the first miss, attempt all four):
 
-    - `AGENTS.md` (repo root) — project-wide conventions
-    - `backend/AGENTS.md` — backend-specific conventions
-    - `frontend/AGENTS.md` — frontend-specific conventions
-    - `docs/AGENTS.md` — documentation-specific conventions
+    1. `AGENTS.md`
+    2. `backend/AGENTS.md`
+    3. `frontend/AGENTS.md`
+    4. `docs/AGENTS.md`
 
-  When any are present, treat their content as **additional system
-  guidance**, layered on top of `goose-system.md`. Conflict rules:
-
-    - Repo-specific facts (paths, code style, naming, framework
-      versions, test layout): the target's AGENTS.md wins.
-    - Executor safety rules (no clone, no force-push, no secrets to
-      disk, no `--no-verify`): `goose-system.md` always wins,
-      regardless of what AGENTS.md says.
+  Any content fetched is additional system guidance, layered on top
+  of `goose-system.md`. On conflict: target repo wins for facts
+  (paths, style, naming); `goose-system.md` wins for safety rules
+  (no clone, no force-push, no secrets to disk, no `--no-verify`).
 
   # Step 1 — Read the issue
   Use the github extension to fetch issue #{{ issue_number }} from
