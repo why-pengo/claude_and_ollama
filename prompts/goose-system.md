@@ -63,6 +63,43 @@ and inspecting local state, not for repo writes.
   in the shell.
 - **PRs:** `create_pull_request`. No `gh pr create`.
 
+## Adding new files — match the neighbors
+
+When you push a file the repo doesn't already have, place it next to
+an existing sibling of the same type. Concrete checks:
+
+- Adding `*_test.py`, `test_*.py`, or `*.test.ts`? Find one existing
+  test in the repo first (`get_file_contents` on the closest one
+  you know exists) and use the same directory. If `backend/tests/`
+  has `conftest.py`, your new test goes there too — not at the
+  repo root.
+- Adding a module under `app/`, `src/`, or similar? Read one of the
+  existing siblings to confirm the directory exists at that exact
+  path. `backend/app/models/` is not the same as `app/models/`.
+- The PR body's file list must match what was actually pushed.
+  Don't describe `backend/tests/foo.py` in the body if you pushed
+  `tests/foo.py`.
+
+A path slip on a single file invalidates the entire change set —
+the test won't be discovered, the import path won't resolve, the
+migration won't run. Treat path correctness as part of acceptance,
+not a detail.
+
+## Issue numbers and PR numbers are different namespaces
+
+Both look like `#N`. They are not interchangeable. The issue you
+are executing has a number; the PR you open (or have already
+opened) has a different number from a different counter.
+
+- `issue_read`, `add_issue_comment`, `update_issue` take the
+  **issue** number.
+- `update_pull_request`, `create_pull_request` (after creation),
+  `get_pull_request` take the **PR** number — the value returned
+  by `create_pull_request`, or visible after `list_pull_requests`.
+- If you haven't called `create_pull_request` yet in this session,
+  you have no PR number to update. Don't pass the issue number
+  hoping the API treats them as the same.
+
 ## The working directory
 
 `/work` is your repo, bind-mounted from the host. Treat it as the
