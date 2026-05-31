@@ -62,6 +62,19 @@ export GITHUB_PERSONAL_ACCESS_TOKEN=<PAT for target>
   | tee /tmp/goose-target-$ISSUE.log
 ```
 
+The wrapper resolves the target's GitHub `default_branch` (via `gh api repos/<repo>`) and passes it as `--params base_branch=<X>` automatically. The recipe and prompts use this everywhere they used to hardcode `main`. So a target that uses `develop` as integration (the `feature/* → develop → main` workflow) gets PRs against `develop` without any extra flag. Override with `--params base_branch=<other>` if you ever need to.
+
+## Giving Goose target-specific guidance with `AGENTS.md`
+
+The recipe now fetches `AGENTS.md` (and `backend/AGENTS.md`, `frontend/AGENTS.md`, `docs/AGENTS.md`) from the target via MCP at the start of every run. Whatever is present gets layered onto `goose-system.md` as additional guidance. Missing files are skipped silently.
+
+Use this for repo-specific facts the harness doesn't know — paths (e.g. "tests live under `backend/tests/`"), framework versions ("SQLAlchemy 2.0 `Mapped[X]` syntax"), patterns ("race-safe `_get_or_seed` for single-row tables"). [Open standard](https://agents.md) read by Cursor, Claude Code, Codex, Aider, and Goose 1.35 — one file serves all agents.
+
+Conflict rules the recipe applies:
+
+- **Repo-specific facts win locally**: paths, naming, style, framework versions — the target's `AGENTS.md` overrides the harness `goose-system.md`.
+- **Executor safety rules always win globally**: no clone, no force-push, no secrets to disk, no `--no-verify` — `goose-system.md` overrides anything `AGENTS.md` says.
+
 ## Reviewing the PR
 
 Plan on a real review every time. Things to actually verify, not assume:

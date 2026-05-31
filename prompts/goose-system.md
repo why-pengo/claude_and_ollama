@@ -22,7 +22,10 @@ Claude Code is the planner; you are the executor.
   the need for a separate workspace, write to `/tmp` instead.
   Anti-pattern: `git clone https://github.com/ORG/REPO …` (drops
   a multi-MB directory on the host that a human has to clean up).
-- Don't push to `main`. Always work on `goose/issue-<N>-<slug>` branches.
+- Don't push to the integration branch directly (the recipe names
+  it; usually `main` for the harness, `develop` for repos that use
+  the `feature/* → develop → main` workflow). Always work on
+  `goose/issue-<N>-<slug>` branches off the integration branch.
 - Don't close issues directly — let the PR's `Closes` clause do it on
   merge.
 - Don't `--force` anything. Don't skip hooks (no `--no-verify`).
@@ -59,8 +62,11 @@ and inspecting local state, not for repo writes.
   Don't claim a mode in PR text that you can't verify, and don't
   invent workaround scripts (e.g. a `permissions.sh` that chmods
   things) — that's scope drift, not a fix.
-- **Branches:** `create_branch` from `main`. No `git checkout -b`
-  in the shell.
+- **Branches:** `create_branch` from the integration branch the
+  recipe specifies (passed as `{{ base_branch }}` and templated
+  into the prompt). Don't hard-code `main` — many repos use
+  `develop` as integration and the recipe will pass that value
+  through. No `git checkout -b` in the shell.
 - **PRs:** `create_pull_request`. No `gh pr create`.
 
 ## Adding new files — match the neighbors

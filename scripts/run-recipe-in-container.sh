@@ -68,10 +68,44 @@ fi
 
 repo_root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 
+# Resolve the target repo's default branch and inject it as
+# base_branch=<X> unless the caller already provided one. The recipe
+# uses {{ base_branch }} for branch creation and PR targeting, so the
+# default branch is now resolved server-side at invocation time rather
+# than hard-coded to "main". Without this, cross-repo runs against
+# repos that use `develop` as integration (Jon's standard
+# feature/* → develop → main workflow) open PRs against `main`
+# instead of `develop` and silently drift behind. See #40.
+target_repo=""
+base_branch_set=false
+for v in "${params[@]}"; do
+  case "$v" in
+    repo=*)        target_repo="${v#repo=}" ;;
+    base_branch=*) base_branch_set=true ;;
+  esac
+done
+
+if ! $base_branch_set; then
+  if [[ -z "$target_repo" ]]; then
+    # Mirrors the recipe's `repo` default — self-runs against the harness.
+    target_repo="why-pengo/claude_and_goose"
+  fi
+  if default_branch="$(gh api "repos/$target_repo" --jq '.default_branch' 2>/dev/null)" && [[ -n "$default_branch" ]]; then
+    params+=("--params" "base_branch=$default_branch")
+    resolved_base="$default_branch (resolved from $target_repo)"
+  else
+    params+=("--params" "base_branch=main")
+    resolved_base="main (fallback — could not resolve from $target_repo)"
+  fi
+else
+  resolved_base="(provided via --params)"
+fi
+
 echo "Image:          $IMAGE"
 echo "Repo mount:     $repo_root -> /work"
 echo "Ollama:         $OLLAMA_HOSTNAME ($ollama_ip):$OLLAMA_PORT"
 echo "Recipe:         $recipe"
+echo "Base branch:    $resolved_base"
 echo "Params:         ${params[*]:-(none)}"
 echo
 

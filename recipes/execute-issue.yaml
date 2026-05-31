@@ -15,6 +15,16 @@ parameters:
     requirement: optional
     default: why-pengo/claude_and_goose
     description: owner/repo to run against
+  - key: base_branch
+    input_type: string
+    requirement: optional
+    default: main
+    description: |
+      Integration branch of the target repo. Branches are created
+      from this; PRs target this. The wrapper script auto-resolves
+      it from the target's GitHub default_branch and passes it via
+      --params. Defaults to `main` for self-runs against the harness
+      where the wrapper isn't involved.
 
 extensions:
   - type: builtin
@@ -35,6 +45,25 @@ prompt: |
   The full operating rules are in `prompts/goose-system.md` — read
   that file first if you haven't already this session.
 
+  The **integration branch** for this run is `{{ base_branch }}`.
+  Every branch you create must be from `{{ base_branch }}`. Every
+  PR you open must target `{{ base_branch }}`. Don't assume `main`
+  — many repos use `develop` (Jon's standard workflow does).
+
+  # Step 0 — Load target-repo guidance
+  Try `get_file_contents` for each of these paths (404 = skip silently;
+  do not stop after the first miss, attempt all four):
+
+    1. `AGENTS.md`
+    2. `backend/AGENTS.md`
+    3. `frontend/AGENTS.md`
+    4. `docs/AGENTS.md`
+
+  Any content fetched is additional system guidance, layered on top
+  of `goose-system.md`. On conflict: target repo wins for facts
+  (paths, style, naming); `goose-system.md` wins for safety rules
+  (no clone, no force-push, no secrets to disk, no `--no-verify`).
+
   # Step 1 — Read the issue
   Use the github extension to fetch issue #{{ issue_number }} from
   {{ repo }}. Read the full body. Then read every file path and
@@ -46,8 +75,8 @@ prompt: |
 
   # Step 2 — Branch
   Create branch `goose/issue-{{ issue_number }}-<slug>` from the
-  latest `main`. The slug is 3–5 kebab-case words drawn from the
-  issue title.
+  latest `{{ base_branch }}`. The slug is 3–5 kebab-case words
+  drawn from the issue title.
 
   # Step 3 — Execute subtasks in order
   For each checklist item:
@@ -82,6 +111,6 @@ prompt: |
   # Rules
   - Never close the issue directly — `Closes` on the PR does that on merge.
   - Never force-push. Never skip hooks (no `--no-verify`).
-  - Never edit `main` directly.
+  - Never edit `{{ base_branch }}` directly.
   - One issue, one PR. Out-of-scope work goes under Follow-ups, not
     into this PR.
