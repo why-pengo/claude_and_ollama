@@ -1,0 +1,994 @@
+Image:          claude-and-goose-runtime
+Repo mount:     /Volumes/Crucial_X9/workspace/claude_and_goose -> /work
+Ollama:         bazzite.local (192.168.6.232):11434
+Recipe:         recipes/execute-issue.yaml
+Base branch:    develop (resolved from why-pengo/health_track)
+Params:         --params issue_number=51 --params repo=why-pengo/health_track --params base_branch=develop
+
+   base_branch: develop
+   issue_number: 51
+   repo: why-pengo/health_track
+
+    __( O)>  ● new session · ollama qwen3.6:latest
+   \____)    20260612_1 · /work
+     L L     goose is ready
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: cat /work/prompts/goose-system.md 2>/dev/null || echo "FILE_NOT_FOUND"
+
+
+  ────────────────────────────────────────
+  ▸ issue_read github
+    method: get
+    issue_number: 51
+    owner: why-pengo
+    repo: health_track
+
+# Goose System Prompt — claude_and_goose
+
+You are the execution agent for the `claude_and_goose` harness.
+Claude Code is the planner; you are the executor.
+
+## What you do
+
+- Read GitHub issues authored to the spec in `prompts/issue-format.md`.
+- Execute the subtask checklist **in order**, one item at a time.
+- Verify every acceptance criterion before opening a PR.
+- Comment on the issue with status; open a PR with `Closes #N` if
+  files changed.
+
+## What you don't do
+
+- Don't reinterpret scope. If an issue is ambiguous, comment asking
+  for clarification — don't guess.
+- Don't touch files outside the listed subtasks.
+- **Never run `git clone`.** The container is already a working
+  copy of the repo at `/work`. There is nothing to clone. This
+  rule covers "practice" or "sandbox" sub-clones too — if you feel
+  the need for a separate workspace, write to `/tmp` instead.
+  Anti-pattern: `git clone https://github.com/ORG/REPO …` (drops
+  a multi-MB directory on the host that a human has to clean up).
+- Don't push to the integration branch directly (the recipe names
+  it; usually `main` for the harness, `develop` for repos that use
+  the `feature/* → develop → main` workflow). Always work on
+  `goose/issue-<N>-<slug>` branches off the integration branch.
+- Don't close issues directly — let the PR's `Closes` clause do it on
+  merge.
+- Don't `--force` anything. Don't skip hooks (no `--no-verify`).
+- **Don't persist secrets to disk.** Tokens, API keys, passwords,
+  SSH keys — these belong in the parent process env or the user's
+  keyring, never in a file. Do not `echo`, `export … >>`, redirect,
+  or `cat >>` a secret into any file (`.env`, dotfiles, scratch
+  files, anywhere). Truncated or "partial" forms count too: a token
+  prefix is still secret material.
+- **Don't touch shell dotfiles.** `~/.profile`, `~/.bashrc`,
+  `~/.zshrc`, `~/.bash_profile`, `~/.zprofile`, `~/.zshenv`, anything
+  under `~/.config/`, and `~/.ssh/*` are off-limits. If a tool seems
+  to need shell config changes to work, stop and comment on the issue
+  — don't "fix" the environment yourself.
+- **If a needed env var is missing, fail loudly.** Don't fabricate
+  credentials or read them out of other places. Comment on the issue
+  naming the env var the human needs to export before re-invoking
+  Goose, then stop.
+- Don't expand the PR to include "follow-up" work you noticed. List
+  it under `## Follow-ups` in the PR body and move on.
+
+## Repo changes go through MCP
+
+All state changes to the repo (files, branches, PRs, comments,
+labels) use `github__*` MCP tools — never shell `git`, `gh`, or
+`git push`. The shell extension is for running scripts you wrote
+and inspecting local state, not for repo writes.
+
+- **Files:** `push_files` (multi) or `create_or_update_file`
+  (single). The MCP does not currently expose a file-mode parameter,
+  so Goose cannot set the executable bit on shell scripts directly.
+  If a subtask requires an executable file, note that in the PR's
+  `## Follow-ups` section so a human can `chmod +x` post-merge.
+  Don't claim a mode in PR text that you can't verify, and don't
+  invent workaround scripts (e.g. a `permissions.sh` that chmods
+  things) — that's scope drift, not a fix.
+- **Branches:** `create_branch` from the integration branch the
+  recipe specifies (passed as `{{ base_branch }}` and templated
+  into the prompt). Don't hard-code `main` — many repos use
+  `develop` as integration and the recipe will pass that value
+  through. No `git checkout -b` in the shell.
+- **PRs:** `create_pull_request`. No `gh pr create`.
+
+## Adding new files — match the neighbors
+
+When you push a file the repo doesn't already have, place it next to
+an existing sibling of the same type. Concrete checks:
+
+- Adding `*_test.py`, `test_*.py`, or `*.test.ts`? Find one existing
+  test in the repo first (`get_file_contents` on the closest one
+  you know exists) and use the same directory. If `backend/tests/`
+  has `conftest.py`, your new test goes there too — not at the
+  repo root.
+- Adding a module under `app/`, `src/`, or similar? Read one of the
+  existing siblings to confirm the directory exists at that exact
+  path. `backend/app/models/` is not the same as `app/models/`.
+- The PR body's file list must match what was actually pushed.
+  Don't describe `backend/tests/foo.py` in the body if you pushed
+  `tests/foo.py`.
+
+A path slip on a single file invalidates the entire change set —
+the test won't be discovered, the import path won't resolve, the
+migration won't run. Treat path correctness as part of acceptance,
+not a detail.
+
+## Issue numbers and PR numbers are different namespaces
+
+Both look like `#N`. They are not interchangeable. The issue you
+are executing has a number; the PR you open (or have already
+opened) has a different number from a different counter.
+
+- `issue_read`, `add_issue_comment`, `issue_write` take the
+  **issue** number.
+- `update_pull_request`, `pull_request_read`, `merge_pull_request`
+  take the **PR** number — the value returned by `create_pull_request`,
+  or visible from `list_pull_requests`. (`create_pull_request` itself
+  creates a PR and *returns* the number; it doesn't take one as input.)
+- If you haven't called `create_pull_request` yet in this session,
+  you have no PR number to update. Don't pass the issue number
+  hoping the API treats them as the same.
+
+## The working directory
+
+`/work` is your repo, bind-mounted from the host. Treat it as the
+single working copy — it's what `git status` reports against and
+what `push_files` modifies. If you need scratch space, write under
+`/tmp` — it disappears when the container exits. The no-clone
+rule above is the load-bearing part: don't try to set up a parallel
+workspace, that's the host pollution we're avoiding.
+
+## Operating principles
+
+- **Verify as you go.** Run tests/commands after each subtask, not all
+  at the end.
+- **Stop on failure.** If a subtask fails twice, stop and comment on
+  the issue with what you tried. Don't loop.
+- **Small, labelled commits.** One subtask, one commit, conventional
+  prefix (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`).
+- **One issue, one PR.** Don't fold multiple issues into a single PR
+  unless explicitly told to.
+- **No silent skips.** If you decide a subtask doesn't need to run,
+  say so in the issue comment and explain why. Never silently drop
+  one.
+
+## Honest verification
+
+If a verification step couldn't actually be run — no auth
+configured, no test runner installed, missing dependency, executable
+bit not set, network unreachable, anything — say so plainly in the
+PR's `## Verification` section. A short line is fine:
+
+  `did not execute; static-checked only`
+
+Do not invent reasons for the skip. Don't claim the step was
+attempted if it wasn't, and don't manufacture a plausible-sounding
+blocker you didn't actually observe. A truthful "didn't run" is
+fine; a fictional "tried but failed because X" wastes the
+reviewer's time chasing a phantom issue.
+
+The same rule applies to acceptance criteria. If you couldn't
+verify one, say so in the PR body — don't tick the checkbox.
+
+## When you're stuck
+
+Comment on the issue with:
+- What you were trying to do
+- What you tried
+- What you observed
+- What input you need to proceed
+
+Then stop. A human will unblock you.Now let me load step 0 - target-repo guidance and context files:
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: AGENTS.md
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/AGENTS.md
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: frontend/AGENTS.md
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: docs/AGENTS.md
+    repo: health_track
+
+All AGENTS.md files are 404 — skipping. The issue has all required sections, so I can proceed.
+
+Let me understand the repo structure and existing patterns:
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/routers/sleep.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/services/analytics.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/main.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/tests/test_sleep.py
+    repo: health_track
+
+Now let me check the conftest.py and schemas:
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/tests/conftest.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/schemas
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/schemas/sleep.py
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: backend/app/models/record.py
+    repo: health_track
+
+Now I have a thorough understanding of the codebase. Let me create a branch and start implementing:
+  ────────────────────────────────────────
+  ▸ list_branches github
+    owner: why-pengo
+    repo: health_track
+
+Now I have the full picture. Let me create the branch and implement the subtasks.
+  ────────────────────────────────────────
+  ▸ create_branch github
+    branch: goose/issue-51-hydration-daily-endpoint
+    from_branch: develop
+    owner: why-pengo
+    repo: health_track
+
+Now let me implement all the subtasks in order. First, subtask 1: add HydrationDaily schema.
+  ────────────────────────────────────────
+  ▸ write
+    path backend/app/schemas/hydration.py
+    content: from datetime import date
+
+from pydantic import BaseModel
+
+
+class HydrationDaily(BaseModel):
+    """One row per calendar day with all five hydration metrics.
+
+    Missing metrics on a date are ``None`` (not ``0``).  Water is
+    reported in fluid ounces rounded to 1 dp; electrolytes in mg
+    rounded to the nearest integer.
+    """
+
+    date: date
+    water_oz: float | None
+    sodium_mg: int | None
+    potassium_mg: int | None
+    calcium_mg: int | None
+    magnesium_mg: int | None
+
+
+Created backend/app/schemas/hydration.py (19 lines)
+  ────────────────────────────────────────
+  ▸ write
+    path backend/app/services/analytics.py
+    content: """Analytics service — all queries use SQLAlchemy 2.0 select() style.
+
+Date strings follow the HAE format: "2024-11-15 07:42:00 -0500"
+SQLite's strftime() returns NULL for timezone-offset strings, so all
+date filtering uses substr(col, 1, 10) to extract the YYYY-MM-DD prefix.
+Python-side aggregation is used for weekly and morning/evening splits
+to avoid complex SQLite-specific date arithmetic.
+"""
+
+import asyncio
+from collections import defaultdict
+from datetime import UTC, date, datetime, timedelta
+
+from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.bp import BPReading
+from app.models.medication import Medication
+from app.models.record import HealthRecord
+from app.models.sleep import SleepRecord
+from app.models.workout import Workout
+from app.schemas.bp import BPMorningEvening, BPRead, BPStats, BPWeeklyRow
+from app.schemas.dashboard import DashboardSummary
+from app.schemas.hydration import HydrationDaily
+from app.schemas.medication import MedicationRead
+from app.schemas.record import DailySummary, RecordType
+from app.schemas.sleep import SleepNightly
+from app.schemas.workout import WorkoutByActivity, WorkoutRead, WorkoutSummary
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_reading_dt(dt_str: str) -> datetime:
+    """
+    Parse HAE date string "2024-11-15 07:42:00 -0500" into a datetime.
+    Python 3.11 fromisoformat requires "±HH:MM" format, so we normalise.
+    """
+    s = dt_str.strip()
+    # Find trailing timezone token (last space + sign)
+    for i in range(len(s) - 1, 0, -1):
+        if s[i - 1] == " " and s[i] in "+-":
+            base = s[: i - 1]
+            tz = s[i:]  # e.g. "-0500" or "+0530"
+            if len(tz) == 5 and ":" not in tz:
+                tz = tz[:3] + ":" + tz[3:]
+            return datetime.fromisoformat(f"{base}T{tz}" if "T" not in base else f"{base}{tz}")
+    # No timezone — treat as naive ISO datetime
+    return datetime.fromisoformat(s.replace(" ", "T", 1))
+
+
+def _date_filters(stmt, date_from: date | None, date_to: date | None):
+    """Apply optional date range filters using SQLite strftime."""
+    if date_from:
+        stmt = stmt.where(func.substr(BPReading.reading_dt, 1, 10) >= date_from.isoformat())
+    if date_to:
+        stmt = stmt.where(func.substr(BPReading.reading_dt, 1, 10) <= date_to.isoformat())
+    return stmt
+
+
+def _safe_avg(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+async def get_bp_stats(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> BPStats:
+    stmt = select(
+        func.avg(BPReading.systolic).label("avg_sys"),
+        func.avg(BPReading.diastolic).label("avg_dia"),
+        func.min(BPReading.systolic).label("min_sys"),
+        func.max(BPReading.systolic).label("max_sys"),
+        func.min(BPReading.diastolic).label("min_dia"),
+        func.max(BPReading.diastolic).label("max_dia"),
+        func.count(BPReading.id).label("n_readings"),
+    )
+    stmt = _date_filters(stmt, date_from, date_to)
+    row = (await session.execute(stmt)).one()
+
+    return BPStats(
+        avg_sys=round(row.avg_sys or 0.0, 2),
+        avg_dia=round(row.avg_dia or 0.0, 2),
+        min_sys=row.min_sys or 0.0,
+        max_sys=row.max_sys or 0.0,
+        min_dia=row.min_dia or 0.0,
+        max_dia=row.max_dia or 0.0,
+        n_readings=row.n_readings or 0,
+    )
+
+
+async def get_bp_weekly(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[BPWeeklyRow]:
+    stmt = select(BPReading).order_by(BPReading.reading_dt)
+    stmt = _date_filters(stmt, date_from, date_to)
+    readings = (await session.execute(stmt)).scalars().all()
+
+    # Group by Monday of ISO week (Python-side to avoid SQLite date arithmetic)
+    weeks: dict[date, list[BPReading]] = defaultdict(list)
+    for r in readings:
+        dt = _parse_reading_dt(r.reading_dt)
+        monday = dt.date() - timedelta(days=dt.weekday())  # weekday(): Mon=0
+        weeks[monday].append(r)
+
+    return [
+        BPWeeklyRow(
+            week_of=week_start.isoformat(),
+            avg_sys=round(_safe_avg([r.systolic for r in rows]), 2),
+            avg_dia=round(_safe_avg([r.diastolic for r in rows]), 2),
+            n_readings=len(rows),
+        )
+        for week_start, rows in sorted(weeks.items())
+    ]
+
+
+async def get_bp_morning_evening(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> BPMorningEvening:
+    stmt = select(BPReading)
+    stmt = _date_filters(stmt, date_from, date_to)
+    readings = (await session.execute(stmt)).scalars().all()
+
+    morning = [r for r in readings if _parse_reading_dt(r.reading_dt).hour < 12]
+    evening = [r for r in readings if _parse_reading_dt(r.reading_dt).hour >= 12]
+
+    return BPMorningEvening(
+        morning_sys=round(_safe_avg([r.systolic for r in morning]), 2),
+        morning_dia=round(_safe_avg([r.diastolic for r in morning]), 2),
+        morning_n=len(morning),
+        evening_sys=round(_safe_avg([r.systolic for r in evening]), 2),
+        evening_dia=round(_safe_avg([r.diastolic for r in evening]), 2),
+        evening_n=len(evening),
+    )
+
+
+# ---------------------------------------------------------------------------
+# HK type → human-readable label map
+# ---------------------------------------------------------------------------
+
+_HK_LABELS: dict[str, str] = {
+    "HKQuantityTypeIdentifierHeartRate": "Heart Rate",
+    "HKQuantityTypeIdentifierRestingHeartRate": "Resting Heart Rate",
+    "HKQuantityTypeIdentifierHeartRateVariabilitySDNN": "HRV (SDNN)",
+    "HKQuantityTypeIdentifierBodyMass": "Body Weight",
+    "HKQuantityTypeIdentifierBodyFatPercentage": "Body Fat %",
+    "HKQuantityTypeIdentifierBodyMassIndex": "BMI",
+    "HKQuantityTypeIdentifierStepCount": "Steps",
+    "HKQuantityTypeIdentifierActiveEnergyBurned": "Active Energy",
+    "HKQuantityTypeIdentifierVO2Max": "VO2 Max",
+    "HKQuantityTypeIdentifierOxygenSaturation": "Blood Oxygen %",
+    "HKQuantityTypeIdentifierRespiratoryRate": "Respiratory Rate",
+    "HKQuantityTypeIdentifierAppleSleepingWristTemperature": "Wrist Temp",
+    "HKQuantityTypeIdentifierWalkingSpeed": "Walking Speed",
+    "HKQuantityTypeIdentifierFlightsClimbed": "Flights Climbed",
+    "HKQuantityTypeIdentifierDistanceWalkingRunning": "Distance Walk/Run",
+    "HKQuantityTypeIdentifierAppleExerciseTime": "Exercise Time",
+    "HKQuantityTypeIdentifierTimeInDaylight": "Time in Daylight",
+    "HKQuantityTypeIdentifierEnvironmentalAudioExposure": "Env Audio (dB)",
+    "HKQuantityTypeIdentifierHeadphoneAudioExposure": "Headphone Audio (dB)",
+    "HKQuantityTypeIdentifierAppleSleepingBreathingDisturbances": ("Sleep Breathing Disturbances"),
+    "sleep_analysis": "Sleep",
+}
+
+
+# ---------------------------------------------------------------------------
+# Workout analytics
+# ---------------------------------------------------------------------------
+
+
+def _workout_date_filters(stmt, date_from: date | None, date_to: date | None):
+    if date_from:
+        stmt = stmt.where(func.substr(Workout.start_dt, 1, 10) >= date_from.isoformat())
+    if date_to:
+        stmt = stmt.where(func.substr(Workout.start_dt, 1, 10) <= date_to.isoformat())
+    return stmt
+
+
+async def get_workout_summary(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> WorkoutSummary:
+    stmt = select(Workout)
+    stmt = _workout_date_filters(stmt, date_from, date_to)
+    workouts = (await session.execute(stmt)).scalars().all()
+
+    by_activity: dict[str, dict] = defaultdict(
+        lambda: {"count": 0, "total_minutes": 0.0, "total_kcal": 0.0}
+    )
+    total_minutes = 0.0
+    total_kcal = 0.0
+
+    for w in workouts:
+        key = w.activity or "Unknown"
+        by_activity[key]["count"] += 1
+        by_activity[key]["total_minutes"] += w.duration_min or 0.0
+        by_activity[key]["total_kcal"] += w.energy_kcal or 0.0
+        total_minutes += w.duration_min or 0.0
+        total_kcal += w.energy_kcal or 0.0
+
+    return WorkoutSummary(
+        total_workouts=len(workouts),
+        total_minutes=round(total_minutes, 2),
+        total_kcal=round(total_kcal, 2),
+        by_activity=[
+            WorkoutByActivity(
+                activity=act,
+                count=data["count"],
+                total_minutes=round(data["total_minutes"], 2),
+                total_kcal=round(data["total_kcal"], 2),
+            )
+            for act, data in sorted(by_activity.items())
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Health records analytics
+# ---------------------------------------------------------------------------
+
+
+async def get_record_types(session: AsyncSession) -> list[RecordType]:
+    stmt = (
+        select(
+            HealthRecord.type,
+            func.count(HealthRecord.id).label("cnt"),
+            func.max(HealthRecord.unit).label("unit"),
+        )
+        .group_by(HealthRecord.type)
+        .order_by(func.count(HealthRecord.id).desc())
+    )
+    rows = (await session.execute(stmt)).all()
+    types = [
+        RecordType(
+            type=row.type,
+            label=_HK_LABELS.get(row.type, row.type),
+            count=row.cnt,
+            unit=row.unit or "",
+        )
+        for row in rows
+    ]
+
+    sleep_count = await session.scalar(select(func.count(SleepRecord.id))) or 0
+    if sleep_count:
+        types.insert(
+            0,
+            RecordType(
+                type="sleep_analysis",
+                label="Sleep",
+                count=sleep_count,
+                unit="hr",
+            ),
+        )
+
+    return types
+
+
+async def get_daily_series(
+    session: AsyncSession,
+    rec_type: str,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    include_sum: bool = False,
+) -> list[DailySummary]:
+    if rec_type == "sleep_analysis":
+        return await _get_daily_sleep_series(session, date_from, date_to)
+
+    stmt = select(HealthRecord).where(HealthRecord.type == rec_type)
+    if date_from:
+        stmt = stmt.where(func.substr(HealthRecord.start_dt, 1, 10) >= date_from.isoformat())
+    if date_to:
+        stmt = stmt.where(func.substr(HealthRecord.start_dt, 1, 10) <= date_to.isoformat())
+    records = (await session.execute(stmt)).scalars().all()
+
+    by_date: dict[str, list[float]] = defaultdict(list)
+    for r in records:
+        if r.value is not None:
+            day = r.start_dt[:10]  # TEXT column — slice is safe
+            by_date[day].append(r.value)
+
+    result = []
+    for day_str, values in sorted(by_date.items()):
+        total = sum(values)
+        result.append(
+            DailySummary(
+                date=date.fromisoformat(day_str),
+                avg_value=round(total / len(values), 4),
+                sum_value=round(total, 4) if include_sum else None,
+                min_value=min(values),
+                max_value=max(values),
+                n=len(values),
+            )
+        )
+    return result
+
+
+async def _get_daily_sleep_series(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[DailySummary]:
+    stmt = select(SleepRecord).where(SleepRecord.total_sleep.is_not(None))
+    if date_from:
+        stmt = stmt.where(SleepRecord.date >= date_from.isoformat())
+    if date_to:
+        stmt = stmt.where(SleepRecord.date <= date_to.isoformat())
+    records = (await session.execute(stmt)).scalars().all()
+
+    # Group by date, preferring Ultrahuman when multiple sources exist on the same night.
+    # Ultrahuman provides stage breakdown; Apple Watch entries may lack it.
+    by_date: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    for r in records:
+        by_date[r.date].append((r.source or "", r.total_sleep))  # type: ignore[arg-type]
+
+    result = []
+    for day_str, source_values in sorted(by_date.items()):
+        ultrahuman = [v for s, v in source_values if "ultrahuman" in s.lower()]
+        values = ultrahuman if ultrahuman else [v for _, v in source_values]
+        result.append(
+            DailySummary(
+                date=date.fromisoformat(day_str),
+                avg_value=round(sum(values) / len(values), 4),
+                min_value=min(values),
+                max_value=max(values),
+                n=len(values),
+            )
+        )
+    return result
+
+
+def _in_bed_minutes(start: str | None, end: str | None) -> float | None:
+    """Return minutes between in_bed_start and in_bed_end, or None if either
+    is missing or unparseable. HAE timestamps have already been normalised
+    to ISO 8601 by the importer."""
+    if not start or not end:
+        return None
+    try:
+        s = datetime.fromisoformat(start)
+        e = datetime.fromisoformat(end)
+    except ValueError:
+        return None
+    delta = (e - s).total_seconds() / 60.0
+    return round(delta, 4) if delta > 0 else None
+
+
+def _pick_preferred_sleep_row(rows: list[SleepRecord]) -> SleepRecord:
+    """When multiple sources cover the same night, prefer Ultrahuman
+    (it carries stage breakdowns Apple sometimes lacks). Within a single
+    source, pick the row with the longest total_sleep so partial naps
+    don't displace the main sleep block."""
+    ultrahuman = [r for r in rows if r.source and "ultrahuman" in r.source.lower()]
+    candidates = ultrahuman if ultrahuman else rows
+    return max(candidates, key=lambda r: r.total_sleep or 0.0)
+
+
+async def get_sleep_nightly(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[SleepNightly]:
+    """Per-night sleep rows with stage breakdown and derived in-bed/efficiency.
+
+    Applies the same Ultrahuman-preferred dedupe rule as the daily series
+    so the page never shows two competing rows for one night.
+    """
+    stmt = select(SleepRecord)
+    if date_from:
+        stmt = stmt.where(SleepRecord.date >= date_from.isoformat())
+    if date_to:
+        stmt = stmt.where(SleepRecord.date <= date_to.isoformat())
+    records = (await session.execute(stmt)).scalars().all()
+
+    by_date: dict[str, list[SleepRecord]] = defaultdict(list)
+    for r in records:
+        by_date[r.date].append(r)
+
+    result: list[SleepNightly] = []
+    for day_str, rows in sorted(by_date.items()):
+        row = _pick_preferred_sleep_row(rows)
+        in_bed_min = _in_bed_minutes(row.in_bed_start, row.in_bed_end)
+        efficiency: float | None = None
+        if in_bed_min and row.total_sleep is not None and in_bed_min > 0:
+            # total_sleep is stored in hours; in_bed_min in minutes.
+            efficiency = round((row.total_sleep * 60.0) / in_bed_min, 4)
+        result.append(
+            SleepNightly(
+                date=date.fromisoformat(day_str),
+                total_sleep=row.total_sleep,
+                deep=row.deep,
+                rem=row.rem,
+                core=row.core,
+                awake=row.awake,
+                in_bed_minutes=in_bed_min,
+                sleep_efficiency=efficiency,
+            )
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Hydration analytics
+# ---------------------------------------------------------------------------
+
+
+async def get_hydration_daily(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[HydrationDaily]:
+    """Daily hydration rows (one per day) for all five metrics.
+
+    Each metric is fetched via ``get_daily_series()``, which already
+    groups by calendar day and applies the optional date filters.
+    Rows are then stitched together by date so the frontend gets a
+    single row per day with all available metrics.
+    """
+    metrics_map: dict[str, str] = {
+        "HKQuantityTypeIdentifierWater": "water_oz",
+        "HKQuantityTypeIdentifierSodium": "sodium_mg",
+        "HKQuantityTypeIdentifierPotassium": "potassium_mg",
+        "HKQuantityTypeIdentifierCalcium": "calcium_mg",
+        "HKQuantityTypeIdentifierMagnesium": "magnesium_mg",
+    }
+
+    # Fetch all five series concurrently
+    coros = {
+        mkey: get_daily_series(session, mkey, date_from, date_to)
+        for mkey in metrics_map
+    }
+    results = await asyncio.gate(*coros)
+
+    # Collect per-date values
+    by_date: dict[str, dict[str, float]] = defaultdict(dict)
+    for mkey, series in results.items():
+        fname = metrics_map[mkey]
+        for entry in series:
+            by_date[entry.date.isoformat()][fname] = entry.sum_value
+
+    # Build rows sorted by date
+    result = []
+    for day_str in sorted(by_date):
+        vals = by_date[day_str]
+        result.append(
+            HydrationDaily(
+                date=date.fromisoformat(day_str),
+                water_oz=vals.get("water_oz"),
+                sodium_mg=vals.get("sodium_mg"),
+                potassium_mg=vals.get("potassium_mg"),
+                calcium_mg=vals.get("calcium_mg"),
+                magnesium_mg=vals.get("magnesium_mg"),
+            )
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Dashboard summary
+# ---------------------------------------------------------------------------
+
+
+async def _get_bp_trend(session: AsyncSession) -> str:
+    """Compare last-7d avg systolic to prior-23d avg systolic within 30 days."""
+    today = datetime.now(UTC).date()
+    cutoff_30d = today - timedelta(days=30)
+    cutoff_7d = today - timedelta(days=7)
+
+    stmt = select(BPReading).where(
+        func.substr(BPReading.reading_dt, 1, 10) >= cutoff_30d.isoformat()
+    )
+    readings = (await session.execute(stmt)).scalars().all()
+
+    last_7 = [
+        r.systolic
+        for r in readings
+        if func.strftime("%Y-%m-%d", r.reading_dt) is not None
+        and r.reading_dt[:10] >= cutoff_7d.isoformat()
+    ]
+    prior_23 = [r.systolic for r in readings if r.reading_dt[:10] < cutoff_7d.isoformat()]
+
+    if not last_7 or not prior_23:
+        return "stable"
+
+    avg_last = _safe_avg(last_7)
+    avg_prior = _safe_avg(prior_23)
+    delta = avg_last - avg_prior
+
+    if delta < -3:
+        return "improving"
+    if delta > 3:
+        return "worsening"
+    return "stable"
+
+
+async def _get_active_medications(session: AsyncSession) -> list[MedicationRead]:
+    today = datetime.now(UTC).date().isoformat()
+    stmt = (
+        select(Medication)
+        .where(or_(Medication.end_date.is_(None), Medication.end_date >= today))
+        .order_by(Medication.start_date)
+    )
+    meds = (await session.execute(stmt)).scalars().all()
+    return [MedicationRead.model_validate(m) for m in meds]
+
+
+async def _get_last_workout(session: AsyncSession) -> WorkoutRead | None:
+    stmt = select(Workout).order_by(Workout.start_dt.desc()).limit(1)
+    w = (await session.execute(stmt)).scalar_one_or_none()
+    return WorkoutRead.model_validate(w) if w else None
+
+
+async def _get_steps_7d(session: AsyncSession) -> float | None:
+    today = datetime.now(UTC).date()
+    cutoff = (today - timedelta(days=7)).isoformat()
+    stmt = (
+        select(func.sum(HealthRecord.value))
+        .where(HealthRecord.type == "step_count")
+        .where(func.substr(HealthRecord.start_dt, 1, 10) >= cutoff)
+    )
+    result = (await session.execute(stmt)).scalar_one_or_none()
+    return float(result) if result is not None else None
+
+
+async def _get_latest_bp(session: AsyncSession) -> BPRead | None:
+    stmt = select(BPReading).order_by(BPReading.reading_dt.desc()).limit(1)
+    r = (await session.execute(stmt)).scalar_one_or_none()
+    return BPRead.model_validate(r) if r else None
+
+
+async def get_dashboard_summary(session: AsyncSession) -> DashboardSummary:
+    """
+    Fetch all dashboard sub-queries concurrently.
+    Uses return_exceptions=True so one failing sub-query never crashes the response.
+    """
+    today = datetime.now(UTC).date()
+    date_from_30d = today - timedelta(days=30)
+
+    results = await asyncio.gather(
+        get_bp_stats(session, date_from=date_from_30d, date_to=today),
+        _get_bp_trend(session),
+        _get_active_medications(session),
+        _get_last_workout(session),
+        _get_steps_7d(session),
+        _get_latest_bp(session),
+        return_exceptions=True,
+    )
+
+    def _safe(val, default):
+        return default if isinstance(val, Exception) else val
+
+    bp_30d: BPStats | None = _safe(results[0], None)
+    # Return null BPStats if no readings exist (all zeros is misleading)
+    if bp_30d and bp_30d.n_readings == 0:
+        bp_30d = None
+
+    return DashboardSummary(
+        bp_30d=bp_30d,
+        bp_trend=_safe(results[1], "stable"),
+        active_medications=_safe(results[2], []),
+        last_workout=_safe(results[3], None),
+        steps_7d=_safe(results[4], None),
+        latest_bp=_safe(results[5], None),
+    )
+
+
+Created backend/app/services/analytics.py (574 lines)Wait, I used `asyncio.gate` which doesn't exist. Let me fix that:
+  ────────────────────────────────────────
+  ▸ edit
+    path /work/backend/app/services/analytics.py
+    before:     coros = {
+        mkey: get_daily_series(session, mkey, date_from, date_to)
+        for mkey in metrics_map
+    }
+    results = await asyncio.gate(*coros)
+    after:     coros = [
+        get_daily_series(session, mkey, date_from, date_to)
+        for mkey in metrics_map
+    ]
+    results_list = await asyncio.gather(*coros)
+
+Edited /work/backend/app/services/analytics.py (5 lines -> 5 lines)
+  ────────────────────────────────────────
+  ▸ edit
+    path /work/backend/app/services/analytics.py
+    before:     # Collect per-date values
+    by_date: dict[str, dict[str, float]] = defaultdict(dict)
+    for mkey, series in results.items():
+        fname = metrics_map[mkey]
+        for entry in series:
+            by_date[entry.date.isoformat()][fname] = entry.sum_value
+    after:     # Collect per-date values
+    by_date: dict[str, dict[str, float]] = defaultdict(dict)
+    for mkey, series in zip(metrics_map, results_list):
+        fname = metrics_map[mkey]
+        for entry in series:
+            by_date[entry.date.isoformat()][fname] = entry.sum_value
+
+Edited /work/backend/app/services/analytics.py (6 lines -> 6 lines)Now let me verify the file looks correct:
+  ────────────────────────────────────────
+  ▸ shell
+    command: cd /work && head -420 backend/app/services/analytics.py | tail -60
+
+    source, pick the row with the longest total_sleep so partial naps
+    don't displace the main sleep block."""
+    ultrahuman = [r for r in rows if r.source and "ultrahuman" in r.source.lower()]
+    candidates = ultrahuman if ultrahuman else rows
+    return max(candidates, key=lambda r: r.total_sleep or 0.0)
+
+
+async def get_sleep_nightly(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[SleepNightly]:
+    """Per-night sleep rows with stage breakdown and derived in-bed/efficiency.
+
+    Applies the same Ultrahuman-preferred dedupe rule as the daily series
+    so the page never shows two competing rows for one night.
+    """
+    stmt = select(SleepRecord)
+    if date_from:
+        stmt = stmt.where(SleepRecord.date >= date_from.isoformat())
+    if date_to:
+        stmt = stmt.where(SleepRecord.date <= date_to.isoformat())
+    records = (await session.execute(stmt)).scalars().all()
+
+    by_date: dict[str, list[SleepRecord]] = defaultdict(list)
+    for r in records:
+        by_date[r.date].append(r)
+
+    result: list[SleepNightly] = []
+    for day_str, rows in sorted(by_date.items()):
+        row = _pick_preferred_sleep_row(rows)
+        in_bed_min = _in_bed_minutes(row.in_bed_start, row.in_bed_end)
+        efficiency: float | None = None
+        if in_bed_min and row.total_sleep is not None and in_bed_min > 0:
+            # total_sleep is stored in hours; in_bed_min in minutes.
+            efficiency = round((row.total_sleep * 60.0) / in_bed_min, 4)
+        result.append(
+            SleepNightly(
+                date=date.fromisoformat(day_str),
+                total_sleep=row.total_sleep,
+                deep=row.deep,
+                rem=row.rem,
+                core=row.core,
+                awake=row.awake,
+                in_bed_minutes=in_bed_min,
+                sleep_efficiency=efficiency,
+            )
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Hydration analytics
+# ---------------------------------------------------------------------------
+
+
+async def get_hydration_daily(
+    session: AsyncSession,
+    date_from: date | None = None,
+    date_to: date | None = None,Good, the analytics service is correct. Now let me check the sleep router to add date filters:

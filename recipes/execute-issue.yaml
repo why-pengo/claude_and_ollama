@@ -79,10 +79,29 @@ prompt: |
   drawn from the issue title.
 
   # Step 3 — Execute subtasks in order
+
+  **Land every change via the github extension.** Only `push_files`
+  (multi-file commit) and `create_or_update_file` (single-file commit)
+  actually update the branch on GitHub. The developer extension's
+  `write` and `edit` modify the container's filesystem only — they do
+  not push to the branch. If you use them for code that needs to land
+  on the branch, your branch stays empty and Steps 5–6 have nothing
+  to fire on. `developer.shell`/`write`/`edit` are fine for *local*
+  operations (running tests, inspecting downloaded content, scratch
+  files under `/tmp`) — just not for the code changes themselves.
+
+  Before overwriting an existing file in the target repo, read its
+  current content first with `get_file_contents`. Don't fabricate a
+  "probably correct" version from memory — the real file may have
+  unrelated content (other functions, imports, etc.) that you'd
+  clobber.
+
   For each checklist item:
-    - Make the single concrete change it describes.
+    - Make the single concrete change it describes (via `push_files`
+      or `create_or_update_file`).
     - Verify it (run the test, build, or command listed).
-    - Commit with a conventional-commit message
+    - Each `push_files` / `create_or_update_file` call carries its
+      own commit message — use a conventional-commit prefix
       (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`).
   Stop and comment on the issue if a subtask is ambiguous. Do not
   invent scope. If a subtask fails twice, stop and report — do not
