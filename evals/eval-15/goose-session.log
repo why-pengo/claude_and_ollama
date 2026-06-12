@@ -1,0 +1,45 @@
+Image:          claude-and-goose-runtime
+Repo mount:     /Volumes/Crucial_X9/workspace/claude_and_goose -> /work
+Ollama:         bazzite.local (192.168.6.232):11434
+Recipe:         recipes/execute-issue.yaml
+Base branch:    develop (resolved from why-pengo/health_track)
+Model:          llama3.3-70b-offload (overriding goose.yaml default)
+Context limit:  65536 (overriding goose.yaml default)
+Params:         --params issue_number=51 --params repo=why-pengo/health_track --params base_branch=develop
+
+   issue_number: 51
+   repo: why-pengo/health_track
+   base_branch: develop
+
+    __( O)>  ● new session · ollama llama3.3-70b-offload
+   \____)    20260612_1 · /work
+     L L     goose is ready
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    repo: health_track
+    path: AGENTS.md
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    path: backend/AGENTS.md
+    repo: health_track
+    owner: why-pengo
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: frontend/AGENTS.md
+    repo: health_track
+
+
+  ────────────────────────────────────────
+  ▸ get_file_contents github
+    owner: why-pengo
+    path: docs/AGENTS.md
+    repo: health_track
+
+{"name": "github__issue", "parameters": {"number": "51", "owner": "why-pengo", "repo": "health_track"}}

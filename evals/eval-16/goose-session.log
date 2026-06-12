@@ -1,0 +1,20 @@
+Image:          claude-and-goose-runtime
+Repo mount:     /Volumes/Crucial_X9/workspace/claude_and_goose -> /work
+Ollama:         bazzite.local (192.168.6.232):11434
+Recipe:         recipes/execute-issue.yaml
+Base branch:    develop (resolved from why-pengo/health_track)
+Model:          qwen2.5-coder:32b (overriding goose.yaml default)
+Context limit:  (goose.yaml default — 131072)
+Params:         --params issue_number=51 --params repo=why-pengo/health_track --params base_branch=develop
+
+   issue_number: 51
+   repo: why-pengo/health_track
+   base_branch: develop
+
+    __( O)>  ● new session · ollama qwen2.5-coder:32b
+   \____)    20260612_1 · /work
+     L L     goose is ready
+{"name": "github__get_file_contents", "arguments": {"owner": "why-pengo", "repo": "health_track", "path": "AGENTS.md"}}
+{"name": "github__get_file_contents", "arguments": {"owner": "why-pengo", "repo": "health_track", "path": "backend/AGENTS.md"}}
+{"name": "github__get_file_contents", "arguments": {"owner": "why-pengo", "repo": "health_track", "path": "frontend/AGENTS.md"}}
+{"name": "github__get_file_contents", "arguments": {"owner": "why-pengo", "repo": "health_track", "path": "docs/AGENTS.md"}}

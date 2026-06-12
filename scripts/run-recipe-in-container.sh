@@ -101,11 +101,34 @@ else
   resolved_base="(provided via --params)"
 fi
 
+# Forward GOOSE_MODEL and GOOSE_CONTEXT_LIMIT if set in parent env — lets
+# callers override the goose.yaml defaults per-invocation for bake-off
+# experiments without editing goose.yaml. The container's goose.yaml
+# still provides defaults; these env vars win because Goose's env-var
+# precedence beats config files. Critical when a model variant was loaded
+# at a smaller context than goose.yaml advertises (e.g. 70B-class models
+# with KV cache pressure can only fit 65K, not the qwen3.6 baseline 131K).
+override_args=()
+if [[ -n "${GOOSE_MODEL:-}" ]]; then
+  override_args+=(-e "GOOSE_MODEL=$GOOSE_MODEL")
+  model_line="$GOOSE_MODEL (overriding goose.yaml default)"
+else
+  model_line="(goose.yaml default — qwen3.6:latest)"
+fi
+if [[ -n "${GOOSE_CONTEXT_LIMIT:-}" ]]; then
+  override_args+=(-e "GOOSE_CONTEXT_LIMIT=$GOOSE_CONTEXT_LIMIT")
+  ctx_line="$GOOSE_CONTEXT_LIMIT (overriding goose.yaml default)"
+else
+  ctx_line="(goose.yaml default — 131072)"
+fi
+
 echo "Image:          $IMAGE"
 echo "Repo mount:     $repo_root -> /work"
 echo "Ollama:         $OLLAMA_HOSTNAME ($ollama_ip):$OLLAMA_PORT"
 echo "Recipe:         $recipe"
 echo "Base branch:    $resolved_base"
+echo "Model:          $model_line"
+echo "Context limit:  $ctx_line"
 echo "Params:         ${params[*]:-(none)}"
 echo
 
@@ -114,5 +137,6 @@ exec docker run --rm -i \
   -e GITHUB_PERSONAL_ACCESS_TOKEN \
   -e "OLLAMA_HOST=http://${ollama_ip}:${OLLAMA_PORT}" \
   -e "GOOSE_ADDITIONAL_CONFIG_FILES=/work/goose.yaml" \
+  ${override_args[@]+"${override_args[@]}"} \
   "$IMAGE" \
   goose run --recipe "/work/$recipe" "${params[@]}"
