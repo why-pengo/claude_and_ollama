@@ -470,16 +470,77 @@ def load_recipe(path: Path, params: dict) -> tuple[str, str]:
     return template_recipe(raw_prompt, params), title
 
 
-def recipe_done(messages: list) -> bool:
-    """True if both create_pull_request and add_issue_comment have been called."""
+FILE_WRITE_TOOLS = {"github__push_files", "github__create_or_update_file"}
+
+
+def tools_called(messages: list) -> set:
+    """All tool names called so far by the assistant."""
     called = set()
     for m in messages:
         if m.get("role") == "assistant" and m.get("tool_calls"):
             for tc in m["tool_calls"]:
                 called.add(tc["function"]["name"])
+    return called
+
+
+def recipe_done(messages: list) -> bool:
+    """True if both create_pull_request and add_issue_comment have been called."""
+    called = tools_called(messages)
     return (
         "github__create_pull_request" in called
         and "github__add_issue_comment" in called
+    )
+
+
+def step_aware_continue_prompt(messages: list, params: dict) -> str:
+    """
+    On a no-tool-call turn, return the most specific next-step instruction
+    we can derive from session state. Catches the eval-20b/20c pattern
+    where the model finishes Step 3 and stalls before Step 5/6 — generic
+    "call a tool" prompts weren't enough; the model needs to be told
+    WHICH tool comes next.
+    """
+    called = tools_called(messages)
+    issue_number = params.get("issue_number", "<the issue>")
+
+    if "github__create_pull_request" in called and "github__add_issue_comment" not in called:
+        return (
+            f"`github__create_pull_request` has fired. The recipe's Step 6 is now "
+            f"mandatory. Your NEXT TOOL CALL must be `github__add_issue_comment` "
+            f"on issue #{issue_number} with the PR link and a status line "
+            f"(✅ done | ⚠️ partial | ❌ blocked). Do not narrate. Call the tool."
+        )
+
+    if FILE_WRITE_TOOLS & called and "github__create_pull_request" not in called:
+        return (
+            "You have committed files to the branch. Step 5 of the recipe is now "
+            "mandatory: open the PR. Your NEXT TOOL CALL must be "
+            "`github__create_pull_request`. Title: match the issue title. "
+            f"Body must include `Closes #{issue_number}`, `## Summary`, "
+            "`## Verification`, `## Subtasks`. Do not narrate. Do not summarize. "
+            "Call the tool."
+        )
+
+    if "github__create_branch" in called and not (FILE_WRITE_TOOLS & called):
+        return (
+            "The branch is created. Continue with Step 3 — execute the issue's "
+            "subtask checklist. Your NEXT TOOL CALL must be `github__push_files` "
+            "(multi-file) or `github__create_or_update_file` (single-file). "
+            "Before overwriting an existing file, fetch its content first with "
+            "`github__get_file_contents` to avoid clobbering unrelated content."
+        )
+
+    if "github__issue_read" in called and "github__create_branch" not in called:
+        return (
+            "Issue read. Continue with Step 2 — create the branch. Your NEXT "
+            "TOOL CALL must be `github__create_branch` with name "
+            f"`goose/issue-{issue_number}-<slug>` from the integration branch."
+        )
+
+    return (
+        "You emitted no tool call this turn. The recipe is not complete. "
+        "Identify which step you're on (Step 0-6) and call the next tool "
+        "directly. Do not narrate. Do not summarize. Call the tool."
     )
 
 
@@ -572,14 +633,9 @@ def run_session(
             print(f"\n=== Recipe complete (turn {turn}) ===")
             return 0
 
-        messages.append({
-            "role": "user",
-            "content": (
-                "You emitted no tool call this turn. The recipe is not complete. "
-                "Identify which step you're on (Step 0-6) and call the next tool directly. "
-                "Do not narrate. Do not summarize. Call the tool."
-            ),
-        })
+        next_prompt = step_aware_continue_prompt(messages, params)
+        print(f"  [runner: nudging — \"{next_prompt[:80]}...\"]\n")
+        messages.append({"role": "user", "content": next_prompt})
 
     print(f"\n=== Hit max_turns ({max_turns}); giving up ===")
     return 3
