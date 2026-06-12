@@ -15,9 +15,14 @@ GOOSE_PROVIDER: ollama
 GOOSE_MODEL: qwen3.6:latest
 OLLAMA_HOST: http://bazzite.local:11434
 
-# Bump these if Goose cuts off on long reasoning steps. qwen3.6 has a
-# generous context window and the 5090 has VRAM to spare.
-GOOSE_CONTEXT_LIMIT: 65536
+# qwen3.6 (= qwen35moe per Ollama model_info) supports 262144 native
+# context length. We started conservative at 65536, but eval-10/11
+# under #45 surfaced multi-file backend tasks hitting saturation
+# (model losing rules, conflating tasks, stopping mid-run). The 5090
+# has ~6GB VRAM headroom at the old setting, so we doubled to 131072
+# (#47 experiment A). If this clears multi-file backend reliability,
+# the model was on a starvation diet — not incapable.
+GOOSE_CONTEXT_LIMIT: 131072
 GOOSE_MAX_TURNS: 100
 
 # Per-chunk timeout (seconds) for streamed Ollama responses. Generous
