@@ -603,13 +603,14 @@ def _tool_result_succeeded(result: str) -> bool:
     return not result.startswith("ERROR")
 
 
-def recipe_done(succeeded: set) -> bool:
+def recipe_done(succeeded: set[str]) -> bool:
     """True if create_pull_request AND add_issue_comment both succeeded.
 
-    `succeeded` is the set of tool names whose latest result was a
-    non-ERROR — maintained incrementally by the session loop. A failed
-    PR call (e.g. 422 from branch protection) followed by a successful
-    comment must not count as done; the branch would orphan.
+    `succeeded` is the set of tool names that have had at least one
+    non-ERROR result this session — maintained as monotonic-add-only by
+    the session loop. The #55 regression guard rides on the same set:
+    a failed PR call (e.g. 422 from branch protection) is never added,
+    so a later successful comment call cannot flip this to True.
     """
     return "github__create_pull_request" in succeeded and "github__add_issue_comment" in succeeded
 
@@ -621,7 +622,7 @@ GENERIC_CONTINUE_PROMPT = (
 )
 
 
-def step_aware_continue_prompt(succeeded: set, steps: list) -> str:
+def step_aware_continue_prompt(succeeded: set[str], steps: list) -> str:
     """
     On a no-tool-call turn, return the most specific next-step instruction
     we can derive from session state. Catches the eval-20b/20c pattern
@@ -629,11 +630,12 @@ def step_aware_continue_prompt(succeeded: set, steps: list) -> str:
     "call a tool" prompts weren't enough; the model needs to be told
     WHICH tool comes next.
 
-    `succeeded` is the set of tool names whose latest result was a
-    non-ERROR — maintained incrementally by the session loop. A step
-    counts as "done" when at least one of its advances_on tools is in
-    that set. The walk returns the pre-templated nudge of the first
-    step whose requires_prior steps are all done but who isn't.
+    `succeeded` is the set of tool names that have had at least one
+    non-ERROR result this session — monotonic-add-only, maintained by
+    the session loop. A step counts as "done" when at least one of its
+    advances_on tools is in that set. The walk returns the pre-templated
+    nudge of the first step whose requires_prior steps are all done but
+    who isn't.
     """
     by_id = {s["id"]: s for s in steps}
 
@@ -692,7 +694,7 @@ def _extract_issue_title(messages: list) -> str | None:
     return None
 
 
-def attempt_salvage(messages: list, params: dict, succeeded: set) -> dict | None:
+def attempt_salvage(messages: list, params: dict, succeeded: set[str]) -> dict | None:
     """
     Open a mechanical PR if the model committed work but never called
     `create_pull_request`. Print a clear marker for eval-log scanning.
@@ -787,7 +789,7 @@ def run_session(
     print()
     print("=== Session start ===")
 
-    succeeded: set = set()
+    succeeded: set[str] = set()
     empty_turn_count = 0
     for turn in range(1, max_turns + 1):
         resp = ollama_chat(host, model, messages, TOOL_SCHEMAS)
