@@ -595,43 +595,23 @@ def load_recipe(path: Path, params: dict) -> tuple[str, str, list]:
     return template_recipe(raw_prompt, params), title, steps
 
 
-def tools_succeeded(messages: list) -> set:
-    """Tool names where at least one call returned a non-ERROR result.
-
-    Pairs each assistant tool_call with its matching tool result (by
-    tool_call_id) and only counts the name if the result doesn't start
-    with the "ERROR" prefix the wrappers use. This is the right signal
-    for recipe completion and step-phase tracking — calling
-    create_pull_request and getting a 422 back is not the same as
-    actually opening a PR.
+def _tool_result_succeeded(result: str) -> bool:
+    """True if a tool result doesn't start with the "ERROR" prefix the
+    wrappers use. Centralises the "what counts as success?" predicate so
+    the dispatch loop and any future caller agree on the same rule.
     """
-    succeeded = set()
-    for i, m in enumerate(messages):
-        if m.get("role") != "assistant":
-            continue
-        for tc in m.get("tool_calls") or []:
-            name = tc["function"]["name"]
-            tc_id = tc.get("id")
-            for follow in messages[i + 1 :]:
-                if follow.get("role") != "tool":
-                    continue
-                if follow.get("tool_call_id") != tc_id:
-                    continue
-                content = follow.get("content") or ""
-                if not content.startswith("ERROR"):
-                    succeeded.add(name)
-                break
-    return succeeded
+    return not result.startswith("ERROR")
 
 
-def recipe_done(messages: list) -> bool:
+def recipe_done(succeeded: set[str]) -> bool:
     """True if create_pull_request AND add_issue_comment both succeeded.
 
-    "Succeeded" means a non-ERROR tool result — see tools_succeeded.
-    A failed PR call (e.g. 422 from branch protection) followed by a
-    comment must not count as done; the branch would orphan.
+    `succeeded` is the set of tool names that have had at least one
+    non-ERROR result this session — maintained as monotonic-add-only by
+    the session loop. The #55 regression guard rides on the same set:
+    a failed PR call (e.g. 422 from branch protection) is never added,
+    so a later successful comment call cannot flip this to True.
     """
-    succeeded = tools_succeeded(messages)
     return "github__create_pull_request" in succeeded and "github__add_issue_comment" in succeeded
 
 
@@ -642,7 +622,7 @@ GENERIC_CONTINUE_PROMPT = (
 )
 
 
-def step_aware_continue_prompt(messages: list, steps: list) -> str:
+def step_aware_continue_prompt(succeeded: set[str], steps: list) -> str:
     """
     On a no-tool-call turn, return the most specific next-step instruction
     we can derive from session state. Catches the eval-20b/20c pattern
@@ -650,13 +630,13 @@ def step_aware_continue_prompt(messages: list, steps: list) -> str:
     "call a tool" prompts weren't enough; the model needs to be told
     WHICH tool comes next.
 
-    Walks the recipe's declared step graph in order. The first step whose
-    requires_prior steps are all done but who isn't done yet wins, and its
-    pre-templated nudge is returned. A step counts as "done" when at least
-    one of its advances_on tools returned a non-ERROR result — see
-    tools_succeeded for why error gating matters.
+    `succeeded` is the set of tool names that have had at least one
+    non-ERROR result this session — monotonic-add-only, maintained by
+    the session loop. A step counts as "done" when at least one of its
+    advances_on tools is in that set. The walk returns the pre-templated
+    nudge of the first step whose requires_prior steps are all done but
+    who isn't.
     """
-    succeeded = tools_succeeded(messages)
     by_id = {s["id"]: s for s in steps}
 
     def step_done(step: dict) -> bool:
@@ -714,7 +694,7 @@ def _extract_issue_title(messages: list) -> str | None:
     return None
 
 
-def attempt_salvage(messages: list, params: dict) -> dict | None:
+def attempt_salvage(messages: list, params: dict, succeeded: set[str]) -> dict | None:
     """
     Open a mechanical PR if the model committed work but never called
     `create_pull_request`. Print a clear marker for eval-log scanning.
@@ -722,9 +702,9 @@ def attempt_salvage(messages: list, params: dict) -> dict | None:
     Returns the salvage_pr result dict, or None if salvage was skipped
     (model already opened the PR, or session lacks the state needed).
     """
-    # Use tools_succeeded so a failed create_pull_request call (e.g. 422)
-    # still triggers salvage rather than letting the branch orphan.
-    if "github__create_pull_request" in tools_succeeded(messages):
+    # A failed create_pull_request call (e.g. 422) is NOT in `succeeded`,
+    # so salvage still fires and the branch doesn't orphan.
+    if "github__create_pull_request" in succeeded:
         return None  # model already opened the PR
 
     branch = _extract_branch(messages)
@@ -809,6 +789,7 @@ def run_session(
     print()
     print("=== Session start ===")
 
+    succeeded: set[str] = set()
     empty_turn_count = 0
     for turn in range(1, max_turns + 1):
         resp = ollama_chat(host, model, messages, TOOL_SCHEMAS)
@@ -844,7 +825,9 @@ def run_session(
                         "content": result,
                     }
                 )
-            if recipe_done(messages):
+                if _tool_result_succeeded(result):
+                    succeeded.add(fn_name)
+            if recipe_done(succeeded):
                 print(f"\n=== Recipe complete: PR + issue comment both fired (turn {turn}) ===")
                 return 0
             continue
@@ -859,20 +842,20 @@ def run_session(
         if empty_turn_count >= 3:
             print(f"\n=== 3 consecutive no-tool-call turns; giving up (turn {turn}) ===")
             if salvage_enabled:
-                attempt_salvage(messages, params)
+                attempt_salvage(messages, params, succeeded)
             return 2
 
-        if recipe_done(messages):
+        if recipe_done(succeeded):
             print(f"\n=== Recipe complete (turn {turn}) ===")
             return 0
 
-        next_prompt = step_aware_continue_prompt(messages, recipe_steps)
+        next_prompt = step_aware_continue_prompt(succeeded, recipe_steps)
         print(f'  [runner: nudging — "{next_prompt[:80]}..."]\n')
         messages.append({"role": "user", "content": next_prompt})
 
     print(f"\n=== Hit max_turns ({max_turns}); giving up ===")
     if salvage_enabled:
-        attempt_salvage(messages, params)
+        attempt_salvage(messages, params, succeeded)
     return 3
 
 

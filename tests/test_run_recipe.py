@@ -15,11 +15,11 @@ from run_recipe import (
     _cap,
     _extract_branch,
     _extract_issue_title,
+    _tool_result_succeeded,
     load_recipe,
     recipe_done,
     step_aware_continue_prompt,
     template_recipe,
-    tools_succeeded,
 )
 
 # ---------------------------------------------------------------------------
@@ -62,79 +62,49 @@ class TestCap:
 
 
 # ---------------------------------------------------------------------------
-# tools_succeeded — pair tool_calls with results, count only non-ERROR
+# _tool_result_succeeded — predicate that gates success-set membership.
+# Lives at the dispatch loop now; tested here as the source of truth for
+# the "ERROR prefix = failure" rule that was the #55 regression.
 # ---------------------------------------------------------------------------
 
 
-def _assistant_call(tc_id: str, name: str) -> dict:
-    return {
-        "role": "assistant",
-        "tool_calls": [{"id": tc_id, "function": {"name": name, "arguments": "{}"}}],
-    }
+class TestToolResultSucceeded:
+    def test_non_error_result_counts(self):
+        assert _tool_result_succeeded('{"number": 71}') is True
 
+    def test_error_prefixed_result_does_not_count(self):
+        # This is the #55 regression guard — a failed PR call returns text
+        # starting with "ERROR" and must not be credited as a success.
+        assert _tool_result_succeeded("ERROR opening PR: 422 head already has open PR") is False
 
-def _tool_result(tc_id: str, content: str) -> dict:
-    return {"role": "tool", "tool_call_id": tc_id, "content": content}
+    def test_bare_error_prefix(self):
+        assert _tool_result_succeeded("ERROR") is False
 
-
-class TestToolsSucceeded:
-    def test_counts_non_error_results(self):
-        messages = [
-            _assistant_call("pr1", "github__create_pull_request"),
-            _tool_result("pr1", '{"number": 71}'),
-            _assistant_call("c1", "github__add_issue_comment"),
-            _tool_result("c1", "https://github.com/.../comments/1"),
-        ]
-        assert tools_succeeded(messages) == {
-            "github__create_pull_request",
-            "github__add_issue_comment",
-        }
-
-    def test_excludes_errored_results(self):
-        # This is the #55 bug — a failed PR call must not count as succeeded
-        messages = [
-            _assistant_call("pr1", "github__create_pull_request"),
-            _tool_result("pr1", "ERROR opening PR: 422 head already has open PR"),
-            _assistant_call("c1", "github__add_issue_comment"),
-            _tool_result("c1", "https://github.com/.../comments/1"),
-        ]
-        assert tools_succeeded(messages) == {"github__add_issue_comment"}
-
-    def test_credits_retry_after_initial_error(self):
-        # Errored first, retried successfully — the retry success counts
-        messages = [
-            _assistant_call("pr1", "github__create_pull_request"),
-            _tool_result("pr1", "ERROR opening PR: 422"),
-            _assistant_call("pr2", "github__create_pull_request"),
-            _tool_result("pr2", '{"number": 72}'),
-        ]
-        assert "github__create_pull_request" in tools_succeeded(messages)
+    def test_empty_result_counts(self):
+        # An empty tool result isn't a failure — some tools return ""
+        # on success (e.g. mid-run with no payload).
+        assert _tool_result_succeeded("") is True
 
 
 # ---------------------------------------------------------------------------
-# recipe_done — both PR and comment must have succeeded
+# recipe_done — set membership check
 # ---------------------------------------------------------------------------
 
 
 class TestRecipeDone:
     def test_true_when_both_succeeded(self):
-        messages = [
-            _assistant_call("pr1", "github__create_pull_request"),
-            _tool_result("pr1", '{"number": 71}'),
-            _assistant_call("c1", "github__add_issue_comment"),
-            _tool_result("c1", "https://github.com/.../comments/1"),
-        ]
-        assert recipe_done(messages) is True
+        assert recipe_done({"github__create_pull_request", "github__add_issue_comment"}) is True
 
-    def test_false_when_pr_errored(self):
-        # The #55 bug: this used to return True, orphaning the branch
-        messages = [
-            _assistant_call("pr1", "github__create_pull_request"),
-            _tool_result("pr1", "ERROR opening PR: 422"),
-            _assistant_call("c1", "github__add_issue_comment"),
-            _tool_result("c1", "https://github.com/.../comments/1"),
-        ]
-        assert recipe_done(messages) is False
+    def test_false_when_pr_missing(self):
+        # The #55 bug: a failed PR call (not in `succeeded`) followed by a
+        # successful comment must NOT count as done — the branch would orphan.
+        assert recipe_done({"github__add_issue_comment"}) is False
+
+    def test_false_when_comment_missing(self):
+        assert recipe_done({"github__create_pull_request"}) is False
+
+    def test_false_on_empty(self):
+        assert recipe_done(set()) is False
 
 
 # ---------------------------------------------------------------------------
@@ -178,92 +148,56 @@ STEPS_FIXTURE = [
 
 class TestStepAwareContinuePrompt:
     def test_returns_first_step_nudge_when_nothing_done(self):
-        assert step_aware_continue_prompt([], STEPS_FIXTURE) == "NUDGE_READ_ISSUE"
+        assert step_aware_continue_prompt(set(), STEPS_FIXTURE) == "NUDGE_READ_ISSUE"
 
     def test_advances_to_branch_after_issue_read(self):
-        messages = [
-            _assistant_call("i1", "github__issue_read"),
-            _tool_result("i1", '{"number": 51}'),
-        ]
-        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_BRANCH"
+        assert step_aware_continue_prompt({"github__issue_read"}, STEPS_FIXTURE) == "NUDGE_BRANCH"
 
     def test_advances_to_write_after_branch(self):
-        messages = [
-            _assistant_call("i1", "github__issue_read"),
-            _tool_result("i1", '{"number": 51}'),
-            _assistant_call("b1", "github__create_branch"),
-            _tool_result("b1", "ok"),
-        ]
-        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_WRITE"
+        succeeded = {"github__issue_read", "github__create_branch"}
+        assert step_aware_continue_prompt(succeeded, STEPS_FIXTURE) == "NUDGE_WRITE"
 
     def test_advances_to_pr_after_push_files(self):
-        messages = [
-            _assistant_call("i1", "github__issue_read"),
-            _tool_result("i1", '{"number": 51}'),
-            _assistant_call("b1", "github__create_branch"),
-            _tool_result("b1", "ok"),
-            _assistant_call("w1", "github__push_files"),
-            _tool_result("w1", "Pushed"),
-        ]
-        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_PR"
+        succeeded = {"github__issue_read", "github__create_branch", "github__push_files"}
+        assert step_aware_continue_prompt(succeeded, STEPS_FIXTURE) == "NUDGE_PR"
 
     def test_advances_to_pr_after_create_or_update_file(self):
         # Either write tool counts — they share an advances_on entry
-        messages = [
-            _assistant_call("i1", "github__issue_read"),
-            _tool_result("i1", '{"number": 51}'),
-            _assistant_call("b1", "github__create_branch"),
-            _tool_result("b1", "ok"),
-            _assistant_call("w1", "github__create_or_update_file"),
-            _tool_result("w1", "Pushed"),
-        ]
-        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_PR"
+        succeeded = {
+            "github__issue_read",
+            "github__create_branch",
+            "github__create_or_update_file",
+        }
+        assert step_aware_continue_prompt(succeeded, STEPS_FIXTURE) == "NUDGE_PR"
 
     def test_advances_to_comment_after_pr(self):
-        messages = [
-            _assistant_call("i1", "github__issue_read"),
-            _tool_result("i1", '{"number": 51}'),
-            _assistant_call("b1", "github__create_branch"),
-            _tool_result("b1", "ok"),
-            _assistant_call("w1", "github__push_files"),
-            _tool_result("w1", "Pushed"),
-            _assistant_call("pr1", "github__create_pull_request"),
-            _tool_result("pr1", '{"number": 71}'),
-        ]
-        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_COMMENT"
+        succeeded = {
+            "github__issue_read",
+            "github__create_branch",
+            "github__push_files",
+            "github__create_pull_request",
+        }
+        assert step_aware_continue_prompt(succeeded, STEPS_FIXTURE) == "NUDGE_COMMENT"
 
     def test_falls_back_when_all_done(self):
-        messages = [
-            _assistant_call("i1", "github__issue_read"),
-            _tool_result("i1", '{"number": 51}'),
-            _assistant_call("b1", "github__create_branch"),
-            _tool_result("b1", "ok"),
-            _assistant_call("w1", "github__push_files"),
-            _tool_result("w1", "Pushed"),
-            _assistant_call("pr1", "github__create_pull_request"),
-            _tool_result("pr1", '{"number": 71}'),
-            _assistant_call("c1", "github__add_issue_comment"),
-            _tool_result("c1", "ok"),
-        ]
-        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == GENERIC_CONTINUE_PROMPT
+        succeeded = {
+            "github__issue_read",
+            "github__create_branch",
+            "github__push_files",
+            "github__create_pull_request",
+            "github__add_issue_comment",
+        }
+        assert step_aware_continue_prompt(succeeded, STEPS_FIXTURE) == GENERIC_CONTINUE_PROMPT
 
     def test_errored_pr_call_does_not_advance_to_comment(self):
-        # A failed create_pull_request must still trigger the PR nudge,
-        # not the comment nudge — the branch would orphan otherwise.
-        messages = [
-            _assistant_call("i1", "github__issue_read"),
-            _tool_result("i1", '{"number": 51}'),
-            _assistant_call("b1", "github__create_branch"),
-            _tool_result("b1", "ok"),
-            _assistant_call("w1", "github__push_files"),
-            _tool_result("w1", "Pushed"),
-            _assistant_call("pr1", "github__create_pull_request"),
-            _tool_result("pr1", "ERROR opening PR: 422"),
-        ]
-        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_PR"
+        # A failed create_pull_request never enters `succeeded` (the dispatch
+        # loop's `_tool_result_succeeded` gate keeps it out), so the PR step
+        # is still pending and its nudge fires. Branch doesn't orphan.
+        succeeded = {"github__issue_read", "github__create_branch", "github__push_files"}
+        assert step_aware_continue_prompt(succeeded, STEPS_FIXTURE) == "NUDGE_PR"
 
     def test_empty_steps_returns_generic_fallback(self):
-        assert step_aware_continue_prompt([], []) == GENERIC_CONTINUE_PROMPT
+        assert step_aware_continue_prompt(set(), []) == GENERIC_CONTINUE_PROMPT
 
     def test_skips_step_with_null_nudge(self):
         # A step without a nudge exists for prereq tracking only — the
@@ -285,7 +219,7 @@ class TestStepAwareContinuePrompt:
         ]
         # Nothing done yet → first step's nudge is None, walk continues,
         # but second step's prereq isn't met → falls through to generic.
-        assert step_aware_continue_prompt([], steps) == GENERIC_CONTINUE_PROMPT
+        assert step_aware_continue_prompt(set(), steps) == GENERIC_CONTINUE_PROMPT
 
 
 # ---------------------------------------------------------------------------
