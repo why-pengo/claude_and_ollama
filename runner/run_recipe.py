@@ -182,6 +182,21 @@ TOOL_SCHEMAS = [
 # Tool implementations — thin wrappers around `gh` CLI
 # ---------------------------------------------------------------------------
 
+# Maximum size of a tool result before truncation. Tool results get appended to
+# `messages` and re-sent to Ollama on every subsequent turn, so an unbounded
+# 100KB lockfile fetch on turn 3 keeps costing context for the rest of the
+# session. 16KB covers most legitimate source files; pathological cases get
+# truncated with a size hint so the model knows the read was partial.
+TOOL_RESULT_SIZE_CAP = 16384
+
+
+def _cap(content: str) -> str:
+    if len(content) <= TOOL_RESULT_SIZE_CAP:
+        return content
+    return content[:TOOL_RESULT_SIZE_CAP] + (
+        f"\n\n... [truncated by runner; full content was {len(content)} bytes]"
+    )
+
 
 def github_issue_read(args: dict) -> str:
     rc, out, err = _gh([
@@ -208,7 +223,7 @@ def github_get_file_contents(args: dict) -> str:
     import base64
     try:
         decoded = base64.b64decode(out.strip().replace('"', '')).decode("utf-8")
-        return decoded
+        return _cap(decoded)
     except Exception as e:
         return f"ERROR decoding content: {e}"
 
