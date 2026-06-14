@@ -172,7 +172,7 @@ def format_salvage_status(result: dict, branch: str, base_branch: str) -> str:
         return f"– Branch {branch} has no commits ahead of {base_branch}; nothing to salvage"
     if status == "error":
         return f"✗ Salvage failed: {result.get('error', 'unknown')}"
-    return f"? Unexpected salvage status: {status!r}"
+    return f"? Unexpected salvage status: {status}"
 
 
 def salvage_comment(repo: str, issue_number: int, pr_url: str) -> str | None:

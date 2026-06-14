@@ -65,7 +65,8 @@ class TestFormatSalvageStatus:
     def test_unrecognised_status_uses_question_mark_marker(self):
         # Regression guard for the failure mode #61 calls out: a new status
         # added in salvage.py without an entry here should be obvious in
-        # eval logs, not silently fall through.
+        # eval logs, not silently fall through. The raw status name is
+        # printed without quotes (matches the original print-tree shape so
+        # this refactor is byte-identical to before).
         s = format_salvage_status({"status": "rate_limited"}, "runner/issue-51-foo", "main")
-        assert s.startswith("? Unexpected salvage status: ")
-        assert "rate_limited" in s
+        assert s == "? Unexpected salvage status: rate_limited"
