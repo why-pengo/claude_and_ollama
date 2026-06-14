@@ -1,7 +1,6 @@
-version: "1.0.0"
 title: Execute GitHub Issue
 description: |
-  Read a GitHub issue conforming to the claude_and_goose issue format
+  Read a GitHub issue conforming to the claude_and_ollama issue format
   (see prompts/issue-format.md), execute its subtask checklist,
   comment with results, and open a PR if files were changed.
 
@@ -12,37 +11,25 @@ parameters:
     description: GitHub issue number to execute (e.g. "1")
   - key: repo
     input_type: string
-    requirement: optional
-    default: why-pengo/claude_and_goose
-    description: owner/repo to run against
+    requirement: required
+    description: owner/repo to run against (e.g. why-pengo/health_track)
   - key: base_branch
     input_type: string
     requirement: optional
     default: main
     description: |
       Integration branch of the target repo. Branches are created
-      from this; PRs target this. The wrapper script auto-resolves
-      it from the target's GitHub default_branch and passes it via
-      --params. Defaults to `main` for self-runs against the harness
-      where the wrapper isn't involved.
-
-extensions:
-  - type: builtin
-    name: developer
-    timeout: 600
-  - type: stdio
-    name: github
-    cmd: github-mcp-server
-    args:
-      - stdio
-    # No `envs:` block — Goose's extension envs map doesn't expand
-    # ${VAR}, so values land literally. MCP stdio subprocess inherits
-    # parent env; export GITHUB_PERSONAL_ACCESS_TOKEN before `goose run`.
-    timeout: 300
+      from this; PRs target it. The runner auto-resolves it from the
+      target's GitHub default_branch when --params repo=... is set,
+      so this only matters as a fallback.
 
 prompt: |
   You are executing GitHub issue #{{ issue_number }} in {{ repo }}.
   Operating rules are in your system context — already loaded.
+
+  Tool names use the `github__` prefix (`github__issue_read`,
+  `github__push_files`, etc.). Names below are shown unprefixed for
+  readability; call them with the full prefixed names.
 
   **Your first tool call is Step 0.** Don't narrate. Call the tool.
 
@@ -50,44 +37,43 @@ prompt: |
   from it; the PR you open targets it.
 
   # Step 0 — Load target-repo guidance
-  Try `get_file_contents` for `AGENTS.md` (root). If it exists, its
-  body is additional system guidance — including pointers to any
+  Try `github__get_file_contents` for `AGENTS.md` (root). If it exists,
+  its body is additional system guidance — including pointers to any
   area-specific files (`backend/AGENTS.md`, `frontend/AGENTS.md`,
   etc.) you should read next based on what the issue actually
   touches. 404 = no AGENTS.md in this repo; skip and move on.
 
   On conflict: target repo wins for facts (paths, style, naming);
-  `goose-system.md` wins for safety rules.
+  the system prompt wins for safety rules.
 
   # Step 1 — Read the issue
-  Fetch issue #{{ issue_number }} from {{ repo }}. Read the full body
-  and the files its Context section points at.
+  Fetch issue #{{ issue_number }} from {{ repo }} via
+  `github__issue_read`. Read the full body and the files its Context
+  section points at.
 
   If a required section is missing (Goal, Context, Subtasks,
   Acceptance criteria, Out of scope), STOP and comment asking for the
   missing pieces. Don't guess scope.
 
   # Step 2 — Branch
-  `create_branch goose/issue-{{ issue_number }}-<slug>` from
-  `{{ base_branch }}`. Slug is 3–5 kebab-case words from the issue
-  title.
+  Call `github__create_branch` with name
+  `runner/issue-{{ issue_number }}-<slug>` from `{{ base_branch }}`.
+  Slug is 3–5 kebab-case words from the issue title.
 
   # Step 3 — Execute subtasks in order
 
-  **Push files via the github extension.** `push_files` /
-  `create_or_update_file` are the only tools that commit to the
-  branch. The developer extension's `write` / `edit` modify the
-  container's filesystem (the harness, not the target repo) — they
-  do not push. If you use them for code that needs to land, the
-  branch stays empty and Steps 5–6 have nothing to fire on.
+  **`github__push_files` and `github__create_or_update_file` are the
+  only tools that commit to the branch.** Nothing else lands code on
+  the target repo.
 
   Before overwriting an existing file in the target repo, fetch its
-  current content first — don't rewrite from memory.
+  current content first with `github__get_file_contents` — don't
+  rewrite from memory.
 
   For each checklist item:
-    - Make the change via `push_files` or `create_or_update_file`
-      with a conventional-commit message (`feat:`, `fix:`, `test:`,
-      `docs:`, `refactor:`).
+    - Make the change via `github__push_files` or
+      `github__create_or_update_file` with a conventional-commit
+      message (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`).
     - Verify it (run the test, build, or command the issue lists).
 
   Stop and comment if a subtask is ambiguous. If a subtask fails
@@ -99,8 +85,9 @@ prompt: |
 
   # Step 5 — Open the PR
 
-  The moment your last file is pushed, call `create_pull_request`.
-  Title matches the issue title. Body, in order:
+  The moment your last file is pushed, call
+  `github__create_pull_request`. Title matches the issue title. Body,
+  in order:
 
     - `Closes #{{ issue_number }}`
     - `## Summary` — what changed, 2–4 bullets
@@ -113,8 +100,9 @@ prompt: |
 
   # Step 6 — Comment on the issue
 
-  After `create_pull_request` returns, call `add_issue_comment` on
-  #{{ issue_number }} with: status (✅ done | ⚠️ partial | ❌ blocked),
-  link to the PR, anything surprising.
+  After `github__create_pull_request` returns, call
+  `github__add_issue_comment` on #{{ issue_number }} with: status
+  (✅ done | ⚠️ partial | ❌ blocked), link to the PR, anything
+  surprising.
 
   Steps 5 and 6 are not optional if any files were pushed.

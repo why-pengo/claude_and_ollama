@@ -20,7 +20,7 @@ if [[ -e "$dir" ]]; then
 fi
 
 mkdir -p "$dir"
-: > "$dir/goose-session.log"
+: > "$dir/session.log"
 
 cat > "$dir/issue.md" <<'EOF'
 <!-- Paste the GitHub issue body here verbatim. -->

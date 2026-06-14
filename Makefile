@@ -1,4 +1,4 @@
-# claude_and_goose / claude_and_ollama — Makefile
+# claude_and_ollama — Makefile
 #
 # Local-host workflow for the direct-Ollama runner. No Docker here; the
 # runner executes on the host against bazzite.local + the gh CLI.
@@ -25,7 +25,7 @@ VENV_CHECK = @test -f $(VENV_BIN)/pytest || \
     (printf "$(RED)Run make install-dev first$(NC)\n" && exit 1)
 
 help: ## Show this help message
-	@printf "$(BLUE)claude_and_goose$(NC)\n"
+	@printf "$(BLUE)claude_and_ollama$(NC)\n"
 	@printf "================\n\n"
 	@printf "$(GREEN)Available commands:$(NC)\n"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort \

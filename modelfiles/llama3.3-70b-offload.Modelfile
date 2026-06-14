@@ -8,7 +8,7 @@
 #   ollama ps                              # inspect actual GPU/CPU split
 #
 # Use from harness with:
-#   GOOSE_MODEL=llama3.3-70b-offload ./scripts/run-recipe-in-container.sh ...
+#   RUNNER_MODEL=llama3.3-70b-offload runner/.venv/bin/python runner/run_recipe.py ...
 #
 # Quantization choice (q3_K_M, ~34 GB on disk):
 # - The original target was q4_K_M (~42.5 GB), but bazzite's Ollama 0.30.7

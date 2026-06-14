@@ -5,29 +5,41 @@ An evaluation harness for a two-agent code workflow:
 
 - **Claude Code** is the planner. It reads context, decomposes work,
   and files structured GitHub Issues.
-- **Goose** is the executor. It reads one issue at a time, executes
-  its subtasks, comments with results, and opens a PR.
+- **The runner** (`runner/run_recipe.py`, calling a local Ollama
+  model on `bazzite.local`) is the executor. It reads one issue at a
+  time, executes its subtasks, comments with results, and opens a PR.
+  If the model exits before the PR call, salvage opens a mechanical
+  PR from the branch so work doesn't orphan.
 
-This repo holds the recipes, prompts, and eval results. It is *not*
-the target project — it is the rig.
+This repo holds the recipes, prompts, the runner, and eval results.
+It is *not* the target project — it is the rig.
+
+> Originally project-named `claude_and_goose`, with Goose as the
+> executor. Goose's session-loop choice (exit-0 on prose-only turns)
+> turned out to be the structural reliability ceiling the harness
+> was tripping over. The runner replaced Goose in PR #54 and made
+> Goose strictly worse on the same target task (0/6 vs 6/12 model
+> PASS + 6/6 review-able-since-salvage). Eval directories from before
+> the runner reference Goose because that's what was running.
 
 ## Pieces
 
 | Path                          | Purpose |
 |-------------------------------|---------|
 | `CLAUDE.md`                   | What Claude Code reads on every session |
-| `goose.yaml`                  | Provider + extension config (Ollama on `bazzite.local`, `qwen3.6:latest`) |
+| `runner/run_recipe.py`        | The executor — Ollama session loop + 7 `github__*` tool wrappers around `gh` |
+| `runner/salvage.py`           | Mechanical PR-from-branch fallback when the model exits before `create_pull_request` |
+| `runner/gh.py`                | Shared `gh` CLI subprocess helper |
 | `recipes/execute-issue.yaml`  | Core recipe: read issue → execute subtasks → PR |
-| `recipes/plan-epic.yaml`      | Stub for future Goose-driven issue authoring |
-| `prompts/goose-system.md`     | System prompt Goose runs with |
-| `prompts/issue-format.md`     | Canonical issue template |
+| `recipes/plan-epic.yaml`      | Stub for future runner-driven issue authoring |
+| `prompts/system-prompt.md`    | System prompt the runner loads on every session |
+| `prompts/issue-format.md`     | Canonical issue template for `runner-task` issues |
+| `tests/`                      | Pytest suite for the pure-function surface of the runner |
+| `Makefile`                    | `install-dev`, `check`, `test`, `ci`, etc. |
 | `evals/`                      | One folder per eval run |
 | `scripts/new-eval.sh`         | Scaffold a new `evals/eval-NN/` directory |
 | `scripts/check-ollama.sh`     | List installed models on the Ollama host |
-| `scripts/post-run-check.sh`   | Verify a goose run produced real artifacts (tool calls + branch / PR) |
-| `Dockerfile`                  | `claude-and-goose-runtime` image — goose + github-mcp-server + gh + git, non-root |
-| `scripts/run-recipe-in-container.sh` | Wrapper that runs a recipe inside the sandbox image |
-| `scripts/smoke-isolation.sh`  | Containment smoke test for the runtime image |
+| `scripts/post-run-check.sh`   | Verify an eval run produced real artifacts (branches, commits, PR) |
 
 ## Execution environment
 
@@ -38,77 +50,62 @@ Ollama host (`bazzite.local`):
 - NVIDIA RTX 5090, 32 GB VRAM
 - Running `qwen3.6:latest` (36B params, Q4_K_M, ~24 GB)
 
+The runner executes on the host (or any machine that can reach
+`bazzite.local:11434`). The `gh` CLI must be authenticated.
+
 ## Running an eval
 
-Goose runs inside a sandboxed Docker container — see issue #4 for
-motivation. The host-side dependency is Docker Desktop and a PAT.
+Prereqs:
+- `make install-dev` once, to create `runner/.venv` with deps
+- `gh auth status` shows you're logged in
+- A `runner-task` issue exists, is `ready-for-execution`, and has no
+  open dependencies
 
-1. A `goose-task` issue exists, is `ready-for-execution`, and has no
-   open dependencies.
-2. Build the runtime image once (or after upgrading goose /
-   github-mcp-server):
-   ```
-   docker build -t claude-and-goose-runtime .
-   ./scripts/smoke-isolation.sh   # optional, confirms containment
-   ```
-3. Export the PAT for the github MCP extension:
-   ```
-   export GITHUB_PERSONAL_ACCESS_TOKEN=...
-   ```
-4. Scaffold an eval directory and run the recipe via the container
-   wrapper. The wrapper resolves `bazzite.local` on the host and
-   exports `OLLAMA_HOST` into the container, so mDNS doesn't need to
-   work from inside Docker.
-   ```
-   ./scripts/new-eval.sh 03
-   ./scripts/run-recipe-in-container.sh \
-     --recipe recipes/execute-issue.yaml \
-     --params issue_number=N \
-     | tee evals/eval-03/goose-session.log
-   ```
-5. Verify the run produced real artifacts (catches the "narration-without-execution" failure mode from eval-05):
-   ```
-   ./scripts/post-run-check.sh N
-   ```
-6. Write `evals/eval-NN/result.md` (template scaffolded by the script).
+```
+./scripts/new-eval.sh 24
+runner/.venv/bin/python runner/run_recipe.py \
+  --recipe recipes/execute-issue.yaml \
+  --params issue_number=N \
+  --params repo=why-pengo/target_repo \
+  | tee evals/eval-24/session.log
+```
+
+Then verify and write up the result:
+```
+./scripts/post-run-check.sh N
+# write evals/eval-24/result.md (template scaffolded by new-eval.sh)
+```
 
 ## Status
 
-**Settled on `qwen3.6:latest`** as the executor model after six
-evals (eval-01, -02, -04, -05, -06, -07; eval-03 was skipped). The
-harness loop (Claude plans → Goose executes → human reviews → PR
-merged) is operational end to end.
+The harness loop (Claude plans → runner executes → human reviews →
+PR merged) is operational end-to-end on `bazzite.local + qwen3.6`.
 
-Eval log:
+Across the 4 most recent k-of-3 batches on the same target
+(`health_track#51`):
 
-- **eval-01** — first containerised Goose run against a real issue.
-- **eval-02** — sandbox containment smoke test.
-- **eval-04-bakeoff** — three-model shootout
-  (`qwen3.6:latest` vs `qwen2.5-coder:32b` vs `devstral:latest`).
-  Only qwen3.6 reliably completed the recipe.
-  [`evals/eval-04-bakeoff/result.md`](evals/eval-04-bakeoff/result.md).
-- **eval-05** — five-run devstral re-bench under multiple config
-  variants. All five failed with distinct failure modes; devstral
-  written off as structurally unsuited.
-  [`evals/eval-05/result.md`](evals/eval-05/result.md).
-- **eval-06** — first real-target eval (`scripts/post-run-check.sh`).
-  Partial pass; human review caught GNU-only portability bugs.
-  [`evals/eval-06/result.md`](evals/eval-06/result.md).
-- **eval-07** — same task after prompt hardening. Shell-call count
-  dropped from 16 to 0; clone-into-host regression gone. New
-  shell/jq quoting bugs caught in review and fixed before merge.
-  [`evals/eval-07/result.md`](evals/eval-07/result.md).
+| Series | Runtime | Salvage | Model PASS | Review-able artifacts |
+|---|---|---|---|---|
+| eval-17 | Goose + heavy harness | — | 0/3 | 0/3 |
+| eval-19 | Goose + slim harness | — | 0/3 | 0/3 |
+| eval-20 | Runner v1 | no | 1/3 | 1/3 |
+| eval-21 | Runner v2 | no | 0/3 | 0/3 |
+| eval-22 | Runner + salvage | yes (unused) | 3/3 | 3/3 |
+| eval-23 | Runner + salvage | yes (fired 1×) | 2/3 | **3/3** |
+| **Combined runner+salvage** | | | **5/6** | **6/6** |
+| **Combined Goose** | | | **0/6** | **0/6** |
 
-Other models considered: `qwen2.5-coder:32b` (Modelfile/template
-gap — emits tool calls as JSON text rather than structured
-`tool_calls`) and `devstral:latest` (trained for the OpenHands
-scaffold; conflicts with Goose's recipe and fails non-deterministically).
+See `evals/eval-NN/result.md` for the full timeline and individual
+writeups.
 
-Open follow-up:
+## Open follow-ups
 
-- #15 — `push_files` doesn't expose a `mode` field on the MCP tool
-  schema, so executables can't be landed with the executable bit
-  set. Blocked on upstream
+- #15 — `push_files` doesn't expose a `mode` field on the underlying
+  API, so executables can't be landed with the executable bit set.
+  Blocked on upstream
   [github/github-mcp-server#2578](https://github.com/github/github-mcp-server/issues/2578).
-  Workaround: `chmod +x` post-merge, documented as a `## Follow-ups`
-  line in goose-authored PRs.
+- #47 — multi-model bake-off using bazzite headroom (reframed for
+  the runner era; tracks whether a larger/code-tuned model improves
+  the quality observations from eval-22 + eval-23)
+- #57, #58, #59, #61, #66, #69 — runner-side refactors and a
+  runner-era HW baseline

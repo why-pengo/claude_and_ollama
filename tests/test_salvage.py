@@ -11,7 +11,7 @@ from salvage import _q
 
 class TestQuoteHelper:
     def test_encodes_slash_in_branch_name(self):
-        assert _q("goose/issue-51-foo") == "goose%2Fissue-51-foo"
+        assert _q("runner/issue-51-foo") == "runner%2Fissue-51-foo"
 
     def test_encodes_special_chars(self):
         # The safe="" arg means *everything* non-alphanumeric gets encoded
