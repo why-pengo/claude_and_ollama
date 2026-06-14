@@ -153,6 +153,28 @@ def salvage_pr(
     }
 
 
+def format_salvage_status(result: dict, branch: str, base_branch: str) -> str:
+    """Render a `salvage_pr` result as a marker-prefixed status line.
+
+    The marker convention (✓ / – / ✗ / ?) and per-status wording live
+    here so the set of recognised statuses has a single source of truth.
+    Adding a new status only touches this file plus `salvage_pr`; the
+    runner's `attempt_salvage` doesn't need to know what's possible.
+    """
+    status = result.get("status")
+    if status == "opened":
+        return f"✓ Salvage PR opened: {result['pr_url']} " f"({result['commit_count']} commits)"
+    if status == "pr_exists":
+        return f"– PR already exists for this branch (#{result['pr_number']}); no salvage needed"
+    if status == "no_branch":
+        return f"– Branch {branch} does not exist on remote; nothing to salvage"
+    if status == "no_commits":
+        return f"– Branch {branch} has no commits ahead of {base_branch}; nothing to salvage"
+    if status == "error":
+        return f"✗ Salvage failed: {result.get('error', 'unknown')}"
+    return f"? Unexpected salvage status: {status}"
+
+
 def salvage_comment(repo: str, issue_number: int, pr_url: str) -> str | None:
     """Post the Step 6 equivalent — a comment linking the salvaged PR."""
     body = (

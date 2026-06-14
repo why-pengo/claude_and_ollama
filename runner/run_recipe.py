@@ -31,7 +31,7 @@ import httpx
 import yaml
 
 from gh import _gh
-from salvage import salvage_comment, salvage_pr
+from salvage import format_salvage_status, salvage_comment, salvage_pr
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SYSTEM_PROMPT_PATH = REPO_ROOT / "prompts" / "system-prompt.md"
@@ -730,25 +730,16 @@ def attempt_salvage(messages: list, params: dict, succeeded: set[str]) -> dict |
 
     print(f"\n=== Salvage attempt: branch={branch} → base={base_branch} ===")
     result = salvage_pr(repo, branch, base_branch, issue_number, issue_title)
-    status = result.get("status")
+    print(f"  {format_salvage_status(result, branch, base_branch)}")
 
-    if status == "opened":
-        print(f"  ✓ Salvage PR opened: {result['pr_url']} ({result['commit_count']} commits)")
+    # 'opened' has a follow-up the formatter can't express: post the Step 6
+    # equivalent comment. Stays here because it does I/O, not formatting.
+    if result.get("status") == "opened":
         comment_url = salvage_comment(repo, issue_number, result["pr_url"])
         if comment_url:
             print(f"  ✓ Salvage comment posted: {comment_url}")
         else:
             print("  ✗ Salvage comment failed to post")
-    elif status == "pr_exists":
-        print(f"  – PR already exists for this branch (#{result['pr_number']}); no salvage needed")
-    elif status == "no_branch":
-        print(f"  – Branch {branch} does not exist on remote; nothing to salvage")
-    elif status == "no_commits":
-        print(f"  – Branch {branch} has no commits ahead of {base_branch}; nothing to salvage")
-    elif status == "error":
-        print(f"  ✗ Salvage failed: {result.get('error', 'unknown')}")
-    else:
-        print(f"  ? Unexpected salvage status: {status}")
 
     return result
 
