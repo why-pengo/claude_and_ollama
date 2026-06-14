@@ -34,6 +34,8 @@ from pathlib import Path
 import httpx
 import yaml
 
+from salvage import salvage_comment, salvage_pr
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SYSTEM_PROMPT_PATH = REPO_ROOT / "prompts" / "goose-system.md"
 
@@ -544,6 +546,99 @@ def step_aware_continue_prompt(messages: list, params: dict) -> str:
     )
 
 
+def _extract_branch(messages: list) -> str | None:
+    """Pull the branch name from the most recent create_branch tool call."""
+    for m in reversed(messages):
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            if tc["function"]["name"] != "github__create_branch":
+                continue
+            try:
+                args = json.loads(tc["function"]["arguments"])
+            except json.JSONDecodeError:
+                continue
+            if args.get("branch"):
+                return args["branch"]
+    return None
+
+
+def _extract_issue_title(messages: list) -> str | None:
+    """Find the issue_read tool result and parse its JSON for the title."""
+    for i, m in enumerate(messages):
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            if tc["function"]["name"] != "github__issue_read":
+                continue
+            tc_id = tc["id"]
+            for follow in messages[i + 1:]:
+                if follow.get("role") != "tool":
+                    continue
+                if follow.get("tool_call_id") != tc_id:
+                    continue
+                try:
+                    data = json.loads(follow["content"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(data, dict) and data.get("title"):
+                    return data["title"]
+    return None
+
+
+def attempt_salvage(messages: list, params: dict) -> dict | None:
+    """
+    Open a mechanical PR if the model committed work but never called
+    `create_pull_request`. Print a clear marker for eval-log scanning.
+
+    Returns the salvage_pr result dict, or None if salvage was skipped
+    (model already opened the PR, or session lacks the state needed).
+    """
+    called = tools_called(messages)
+    if "github__create_pull_request" in called:
+        return None  # model already opened the PR
+
+    branch = _extract_branch(messages)
+    issue_title = _extract_issue_title(messages)
+    repo = params.get("repo", "")
+    base_branch = params.get("base_branch", "main")
+    issue_number_raw = params.get("issue_number")
+
+    if not (branch and issue_title and repo and issue_number_raw):
+        print("\n=== Salvage skipped: missing branch / issue-title / repo / issue-number ===")
+        return None
+
+    try:
+        issue_number = int(issue_number_raw)
+    except (TypeError, ValueError):
+        print(f"\n=== Salvage skipped: issue_number={issue_number_raw!r} not an int ===")
+        return None
+
+    print(f"\n=== Salvage attempt: branch={branch} → base={base_branch} ===")
+    result = salvage_pr(repo, branch, base_branch, issue_number, issue_title)
+    status = result.get("status")
+
+    if status == "opened":
+        print(f"  ✓ Salvage PR opened: {result['pr_url']} ({result['commit_count']} commits)")
+        comment_url = salvage_comment(repo, issue_number, result["pr_url"])
+        if comment_url:
+            print(f"  ✓ Salvage comment posted: {comment_url}")
+        else:
+            print(f"  ✗ Salvage comment failed to post")
+    elif status == "pr_exists":
+        print(f"  – PR already exists for this branch (#{result['pr_number']}); no salvage needed")
+    elif status == "no_branch":
+        print(f"  – Branch {branch} does not exist on remote; nothing to salvage")
+    elif status == "no_commits":
+        print(f"  – Branch {branch} has no commits ahead of {base_branch}; nothing to salvage")
+    elif status == "error":
+        print(f"  ✗ Salvage failed: {result.get('error', 'unknown')}")
+    else:
+        print(f"  ? Unexpected salvage status: {status}")
+
+    return result
+
+
 def log_tool_call(name: str, args: dict) -> None:
     """Mirror Goose's ▸ marker format so eval logs are comparable."""
     print("\n  ────────────────────────────────────────")
@@ -563,6 +658,7 @@ def run_session(
     recipe_path: Path,
     params: dict,
     max_turns: int = 60,
+    salvage_enabled: bool = True,
 ) -> int:
     system_prompt = SYSTEM_PROMPT_PATH.read_text()
     recipe_prompt, recipe_title = load_recipe(recipe_path, params)
@@ -627,6 +723,8 @@ def run_session(
         empty_turn_count += 1
         if empty_turn_count >= 3:
             print(f"\n=== 3 consecutive no-tool-call turns; giving up (turn {turn}) ===")
+            if salvage_enabled:
+                attempt_salvage(messages, params)
             return 2
 
         if recipe_done(messages):
@@ -638,6 +736,8 @@ def run_session(
         messages.append({"role": "user", "content": next_prompt})
 
     print(f"\n=== Hit max_turns ({max_turns}); giving up ===")
+    if salvage_enabled:
+        attempt_salvage(messages, params)
     return 3
 
 
@@ -662,6 +762,12 @@ def main() -> int:
         default=os.environ.get("OLLAMA_HOST", "http://bazzite.local:11434"),
     )
     parser.add_argument("--max-turns", type=int, default=60)
+    parser.add_argument(
+        "--no-salvage",
+        action="store_true",
+        help="Disable the mechanical PR-from-branch fallback when the model exits without "
+             "calling create_pull_request.",
+    )
     args = parser.parse_args()
 
     if not args.recipe.exists():
@@ -695,6 +801,7 @@ def main() -> int:
         recipe_path=args.recipe,
         params=params,
         max_turns=args.max_turns,
+        salvage_enabled=not args.no_salvage,
     )
 
 
