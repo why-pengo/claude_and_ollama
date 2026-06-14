@@ -481,22 +481,46 @@ def load_recipe(path: Path, params: dict) -> tuple[str, str]:
 FILE_WRITE_TOOLS = {"github__push_files", "github__create_or_update_file"}
 
 
-def tools_called(messages: list) -> set:
-    """All tool names called so far by the assistant."""
-    called = set()
-    for m in messages:
-        if m.get("role") == "assistant" and m.get("tool_calls"):
-            for tc in m["tool_calls"]:
-                called.add(tc["function"]["name"])
-    return called
+def tools_succeeded(messages: list) -> set:
+    """Tool names where at least one call returned a non-ERROR result.
+
+    Pairs each assistant tool_call with its matching tool result (by
+    tool_call_id) and only counts the name if the result doesn't start
+    with the "ERROR" prefix the wrappers use. This is the right signal
+    for recipe completion and step-phase tracking — calling
+    create_pull_request and getting a 422 back is not the same as
+    actually opening a PR.
+    """
+    succeeded = set()
+    for i, m in enumerate(messages):
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            name = tc["function"]["name"]
+            tc_id = tc.get("id")
+            for follow in messages[i + 1:]:
+                if follow.get("role") != "tool":
+                    continue
+                if follow.get("tool_call_id") != tc_id:
+                    continue
+                content = follow.get("content") or ""
+                if not content.startswith("ERROR"):
+                    succeeded.add(name)
+                break
+    return succeeded
 
 
 def recipe_done(messages: list) -> bool:
-    """True if both create_pull_request and add_issue_comment have been called."""
-    called = tools_called(messages)
+    """True if create_pull_request AND add_issue_comment both succeeded.
+
+    "Succeeded" means a non-ERROR tool result — see tools_succeeded.
+    A failed PR call (e.g. 422 from branch protection) followed by a
+    comment must not count as done; the branch would orphan.
+    """
+    succeeded = tools_succeeded(messages)
     return (
-        "github__create_pull_request" in called
-        and "github__add_issue_comment" in called
+        "github__create_pull_request" in succeeded
+        and "github__add_issue_comment" in succeeded
     )
 
 
@@ -508,10 +532,13 @@ def step_aware_continue_prompt(messages: list, params: dict) -> str:
     "call a tool" prompts weren't enough; the model needs to be told
     WHICH tool comes next.
     """
-    called = tools_called(messages)
+    # Use tools_succeeded — a tool that was called but errored shouldn't
+    # advance the step-phase detection (e.g. failed create_pull_request
+    # must not push the model toward Step 6 comment).
+    succeeded = tools_succeeded(messages)
     issue_number = params.get("issue_number", "<the issue>")
 
-    if "github__create_pull_request" in called and "github__add_issue_comment" not in called:
+    if "github__create_pull_request" in succeeded and "github__add_issue_comment" not in succeeded:
         return (
             f"`github__create_pull_request` has fired. The recipe's Step 6 is now "
             f"mandatory. Your NEXT TOOL CALL must be `github__add_issue_comment` "
@@ -519,7 +546,7 @@ def step_aware_continue_prompt(messages: list, params: dict) -> str:
             f"(✅ done | ⚠️ partial | ❌ blocked). Do not narrate. Call the tool."
         )
 
-    if FILE_WRITE_TOOLS & called and "github__create_pull_request" not in called:
+    if FILE_WRITE_TOOLS & succeeded and "github__create_pull_request" not in succeeded:
         return (
             "You have committed files to the branch. Step 5 of the recipe is now "
             "mandatory: open the PR. Your NEXT TOOL CALL must be "
@@ -529,7 +556,7 @@ def step_aware_continue_prompt(messages: list, params: dict) -> str:
             "Call the tool."
         )
 
-    if "github__create_branch" in called and not (FILE_WRITE_TOOLS & called):
+    if "github__create_branch" in succeeded and not (FILE_WRITE_TOOLS & succeeded):
         return (
             "The branch is created. Continue with Step 3 — execute the issue's "
             "subtask checklist. Your NEXT TOOL CALL must be `github__push_files` "
@@ -538,7 +565,7 @@ def step_aware_continue_prompt(messages: list, params: dict) -> str:
             "`github__get_file_contents` to avoid clobbering unrelated content."
         )
 
-    if "github__issue_read" in called and "github__create_branch" not in called:
+    if "github__issue_read" in succeeded and "github__create_branch" not in succeeded:
         return (
             "Issue read. Continue with Step 2 — create the branch. Your NEXT "
             "TOOL CALL must be `github__create_branch` with name "
@@ -600,8 +627,9 @@ def attempt_salvage(messages: list, params: dict) -> dict | None:
     Returns the salvage_pr result dict, or None if salvage was skipped
     (model already opened the PR, or session lacks the state needed).
     """
-    called = tools_called(messages)
-    if "github__create_pull_request" in called:
+    # Use tools_succeeded so a failed create_pull_request call (e.g. 422)
+    # still triggers salvage rather than letting the branch orphan.
+    if "github__create_pull_request" in tools_succeeded(messages):
         return None  # model already opened the PR
 
     branch = _extract_branch(messages)
