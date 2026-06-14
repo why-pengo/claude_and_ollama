@@ -7,7 +7,7 @@
           {
             "type": "command",
             "if": "Bash(git commit *)",
-            "command": "cd \"$(git rev-parse --show-toplevel)\" && make check >&2 || jq -nc '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"make check failed — fix format/lint issues before committing (make ci adds the test suite).\"}}'",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); case \"$cmd\" in *\"git commit\"*) cd \"$(git rev-parse --show-toplevel)\" && make check >&2 || jq -nc '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"make check failed — fix format/lint issues before committing (make ci adds the test suite).\"}}' ;; esac",
             "timeout": 120
           }
         ]
