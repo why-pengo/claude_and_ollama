@@ -501,7 +501,13 @@ DISPATCH = {
 # ---------------------------------------------------------------------------
 
 
-def ollama_chat(host: str, model: str, messages: list, tools: list) -> dict:
+def ollama_chat(client: httpx.Client, host: str, model: str, messages: list, tools: list) -> dict:
+    """POST a chat-completion request via a caller-owned httpx.Client.
+
+    The client is created once per session in `run_session` so the
+    underlying TCP connection (and keep-alive pool) is reused across
+    every turn instead of being torn down and re-handshaken each time.
+    """
     url = f"{host.rstrip('/')}/v1/chat/completions"
     payload = {
         "model": model,
@@ -509,10 +515,9 @@ def ollama_chat(host: str, model: str, messages: list, tools: list) -> dict:
         "tools": tools,
         "stream": False,
     }
-    with httpx.Client(timeout=600.0) as client:
-        r = client.post(url, json=payload)
-        r.raise_for_status()
-        return r.json()
+    r = client.post(url, json=payload)
+    r.raise_for_status()
+    return r.json()
 
 
 def template_recipe(prompt: str, params: dict) -> str:
@@ -791,67 +796,75 @@ def run_session(
 
     succeeded: set[str] = set()
     empty_turn_count = 0
-    for turn in range(1, max_turns + 1):
-        resp = ollama_chat(host, model, messages, TOOL_SCHEMAS)
-        msg = resp["choices"][0]["message"]
-        messages.append(msg)
+    # One httpx.Client for the whole session — TCP+TLS handshake to the
+    # Ollama host happens once, then the connection pool keeps the socket
+    # warm across every turn (vs. a per-call handshake under the old shape).
+    with httpx.Client(timeout=600.0) as client:
+        for turn in range(1, max_turns + 1):
+            resp = ollama_chat(client, host, model, messages, TOOL_SCHEMAS)
+            msg = resp["choices"][0]["message"]
+            messages.append(msg)
 
-        tool_calls = msg.get("tool_calls") or []
-        content = msg.get("content") or ""
+            tool_calls = msg.get("tool_calls") or []
+            content = msg.get("content") or ""
 
-        if tool_calls:
-            empty_turn_count = 0
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"]["arguments"])
-                except (json.JSONDecodeError, TypeError):
-                    # TypeError covers Ollama providers that return arguments
-                    # as None or as a dict already (rather than a JSON string).
-                    fn_args = tc["function"]["arguments"]
-                log_tool_call(fn_name, fn_args if isinstance(fn_args, dict) else {"raw": fn_args})
-                impl = DISPATCH.get(fn_name)
-                if impl is None:
-                    result = f"ERROR: unknown tool {fn_name}. Available: {sorted(DISPATCH.keys())}"
-                else:
+            if tool_calls:
+                empty_turn_count = 0
+                for tc in tool_calls:
+                    fn_name = tc["function"]["name"]
                     try:
-                        result = impl(fn_args if isinstance(fn_args, dict) else {})
-                    except Exception as e:
-                        result = f"ERROR running {fn_name}: {type(e).__name__}: {e}"
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": result,
-                    }
-                )
-                if _tool_result_succeeded(result):
-                    succeeded.add(fn_name)
+                        fn_args = json.loads(tc["function"]["arguments"])
+                    except (json.JSONDecodeError, TypeError):
+                        # TypeError covers Ollama providers that return arguments
+                        # as None or as a dict already (rather than a JSON string).
+                        fn_args = tc["function"]["arguments"]
+                    log_tool_call(
+                        fn_name, fn_args if isinstance(fn_args, dict) else {"raw": fn_args}
+                    )
+                    impl = DISPATCH.get(fn_name)
+                    if impl is None:
+                        result = (
+                            f"ERROR: unknown tool {fn_name}. Available: {sorted(DISPATCH.keys())}"
+                        )
+                    else:
+                        try:
+                            result = impl(fn_args if isinstance(fn_args, dict) else {})
+                        except Exception as e:
+                            result = f"ERROR running {fn_name}: {type(e).__name__}: {e}"
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result,
+                        }
+                    )
+                    if _tool_result_succeeded(result):
+                        succeeded.add(fn_name)
+                if recipe_done(succeeded):
+                    print(f"\n=== Recipe complete: PR + issue comment both fired (turn {turn}) ===")
+                    return 0
+                continue
+
+            # No tool call this turn. THIS IS THE CRUX of the POC.
+            # Goose would exit here; we prompt the model to continue.
+            if content:
+                print(f"\n  [model emitted prose — {len(content)} chars; no tool call]")
+                print(f"  {content[:300]}{'...' if len(content) > 300 else ''}\n")
+
+            empty_turn_count += 1
+            if empty_turn_count >= 3:
+                print(f"\n=== 3 consecutive no-tool-call turns; giving up (turn {turn}) ===")
+                if salvage_enabled:
+                    attempt_salvage(messages, params, succeeded)
+                return 2
+
             if recipe_done(succeeded):
-                print(f"\n=== Recipe complete: PR + issue comment both fired (turn {turn}) ===")
+                print(f"\n=== Recipe complete (turn {turn}) ===")
                 return 0
-            continue
 
-        # No tool call this turn. THIS IS THE CRUX of the POC.
-        # Goose would exit here; we prompt the model to continue.
-        if content:
-            print(f"\n  [model emitted prose — {len(content)} chars; no tool call]")
-            print(f"  {content[:300]}{'...' if len(content) > 300 else ''}\n")
-
-        empty_turn_count += 1
-        if empty_turn_count >= 3:
-            print(f"\n=== 3 consecutive no-tool-call turns; giving up (turn {turn}) ===")
-            if salvage_enabled:
-                attempt_salvage(messages, params, succeeded)
-            return 2
-
-        if recipe_done(succeeded):
-            print(f"\n=== Recipe complete (turn {turn}) ===")
-            return 0
-
-        next_prompt = step_aware_continue_prompt(succeeded, recipe_steps)
-        print(f'  [runner: nudging — "{next_prompt[:80]}..."]\n')
-        messages.append({"role": "user", "content": next_prompt})
+            next_prompt = step_aware_continue_prompt(succeeded, recipe_steps)
+            print(f'  [runner: nudging — "{next_prompt[:80]}..."]\n')
+            messages.append({"role": "user", "content": next_prompt})
 
     print(f"\n=== Hit max_turns ({max_turns}); giving up ===")
     if salvage_enabled:
