@@ -1,0 +1,28 @@
+Image:          claude-and-goose-runtime
+Repo mount:     /Volumes/Crucial_X9/workspace/claude_and_goose -> /work
+Ollama:         bazzite.local (192.168.6.232):11434
+Recipe:         recipes/execute-issue.yaml
+Base branch:    develop (resolved from why-pengo/health_track)
+Model:          devstral:latest (overriding goose.yaml default)
+Context limit:  65536 (overriding goose.yaml default)
+Params:         --params issue_number=51 --params repo=why-pengo/health_track --params base_branch=develop
+
+Loading recipe: Execute GitHub Issue
+Description: Read a GitHub issue conforming to the claude_and_goose issue format
+(see prompts/issue-format.md), execute its subtask checklist,
+comment with results, and open a PR if files were changed.
+
+Parameters used to load this recipe:
+
+   repo: why-pengo/health_track
+   base_branch: develop
+   issue_number: 51
+
+    __( O)>  ● new session · ollama devstral:latest
+   \____)    20260612_1 · /work
+     L L     goose is ready
+<info-msg>
+
+**Step 0 — Load target-repo guidance**
+
+</info-msg>

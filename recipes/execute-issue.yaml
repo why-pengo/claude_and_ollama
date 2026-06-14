@@ -42,108 +42,80 @@ extensions:
 
 prompt: |
   You are executing GitHub issue #{{ issue_number }} in {{ repo }}.
-  The full operating rules are in `prompts/goose-system.md` — read
-  that file first if you haven't already this session.
+  Operating rules are in your system context. Don't shell-cat
+  `goose-system.md` — it's already loaded.
 
-  The **integration branch** for this run is `{{ base_branch }}`.
-  Every branch you create must be from `{{ base_branch }}`. Every
-  PR you open must target `{{ base_branch }}`. Don't assume `main`
-  — many repos use `develop` (Jon's standard workflow does).
+  **Your first tool call is Step 0.** Don't narrate. Call the tool.
+
+  Integration branch: `{{ base_branch }}`. Branches you create come
+  from it; the PR you open targets it.
 
   # Step 0 — Load target-repo guidance
-  Try `get_file_contents` for each of these paths (404 = skip silently;
-  do not stop after the first miss, attempt all four):
+  Try `get_file_contents` for `AGENTS.md` (root). If it exists, its
+  body is additional system guidance — including pointers to any
+  area-specific files (`backend/AGENTS.md`, `frontend/AGENTS.md`,
+  etc.) you should read next based on what the issue actually
+  touches. 404 = no AGENTS.md in this repo; skip and move on.
 
-    1. `AGENTS.md`
-    2. `backend/AGENTS.md`
-    3. `frontend/AGENTS.md`
-    4. `docs/AGENTS.md`
-
-  Any content fetched is additional system guidance, layered on top
-  of `goose-system.md`. On conflict: target repo wins for facts
-  (paths, style, naming); `goose-system.md` wins for safety rules
-  (no clone, no force-push, no secrets to disk, no `--no-verify`).
+  On conflict: target repo wins for facts (paths, style, naming);
+  `goose-system.md` wins for safety rules.
 
   # Step 1 — Read the issue
-  Use the github extension to fetch issue #{{ issue_number }} from
-  {{ repo }}. Read the full body. Then read every file path and
-  follow every link listed in its Context section.
+  Fetch issue #{{ issue_number }} from {{ repo }}. Read the full body
+  and the files its Context section points at.
 
-  If the issue is missing any required section (Goal, Context,
-  Subtasks, Acceptance criteria, Out of scope), STOP and post a
-  comment asking for the missing pieces. Do not guess scope.
+  If a required section is missing (Goal, Context, Subtasks,
+  Acceptance criteria, Out of scope), STOP and comment asking for the
+  missing pieces. Don't guess scope.
 
   # Step 2 — Branch
-  Create branch `goose/issue-{{ issue_number }}-<slug>` from the
-  latest `{{ base_branch }}`. The slug is 3–5 kebab-case words
-  drawn from the issue title.
+  `create_branch goose/issue-{{ issue_number }}-<slug>` from
+  `{{ base_branch }}`. Slug is 3–5 kebab-case words from the issue
+  title.
 
   # Step 3 — Execute subtasks in order
 
-  **Land every change via the github extension.** Only `push_files`
-  (multi-file commit) and `create_or_update_file` (single-file commit)
-  actually update the branch on GitHub. The developer extension's
-  `write` and `edit` modify the container's filesystem only — they do
-  not push to the branch. If you use them for code that needs to land
-  on the branch, your branch stays empty and Steps 5–6 have nothing
-  to fire on. `developer.shell`/`write`/`edit` are fine for *local*
-  operations (running tests, inspecting downloaded content, scratch
-  files under `/tmp`) — just not for the code changes themselves.
+  **Push files via the github extension.** `push_files` /
+  `create_or_update_file` are the only tools that commit to the
+  branch. The developer extension's `write` / `edit` modify the
+  container's filesystem (the harness, not the target repo) — they
+  do not push. If you use them for code that needs to land, the
+  branch stays empty and Steps 5–6 have nothing to fire on.
 
-  Before overwriting an existing file in the target repo, read its
-  current content first with `get_file_contents`. Don't fabricate a
-  "probably correct" version from memory — the real file may have
-  unrelated content (other functions, imports, etc.) that you'd
-  clobber.
+  Before overwriting an existing file in the target repo, fetch its
+  current content first — don't rewrite from memory.
 
   For each checklist item:
-    - Make the single concrete change it describes (via `push_files`
-      or `create_or_update_file`).
-    - Verify it (run the test, build, or command listed).
-    - Each `push_files` / `create_or_update_file` call carries its
-      own commit message — use a conventional-commit prefix
-      (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`).
-  Stop and comment on the issue if a subtask is ambiguous. Do not
-  invent scope. If a subtask fails twice, stop and report — do not
-  loop.
+    - Make the change via `push_files` or `create_or_update_file`
+      with a conventional-commit message (`feat:`, `fix:`, `test:`,
+      `docs:`, `refactor:`).
+    - Verify it (run the test, build, or command the issue lists).
+
+  Stop and comment if a subtask is ambiguous. If a subtask fails
+  twice, stop and report — don't loop.
 
   # Step 4 — Verify acceptance criteria
-  Run every observable check listed under Acceptance criteria. If any
-  fail, fix and re-verify before opening the PR.
+  Run every observable check under Acceptance criteria. If any fail,
+  fix and re-verify before opening the PR.
 
   # Step 5 — Open the PR
 
-  The moment your last file is pushed in Step 3, call `create_pull_request`.
-  Don't ask, don't defer, don't decide whether — just do it. This is how
-  the issue closes. Skipping it means a human has to come behind you and
-  clean up an orphan branch.
+  The moment your last file is pushed, call `create_pull_request`.
+  Title matches the issue title. Body, in order:
 
-  Title: match the issue title.
-  Body must include, in this order:
     - `Closes #{{ issue_number }}`
     - `## Summary` — what changed, 2–4 bullets
     - `## Verification` — each acceptance criterion and how you
-      confirmed it
+      confirmed it (use the "Honest verification" rule for anything
+      you couldn't run)
     - `## Subtasks` — mirror of the issue checklist. Tick only items
-      you actually executed; leave others unchecked with a one-line
-      note. Don't tick a box for "verified by reading the file" —
-      reading isn't running.
+      you actually executed
     - `## Follow-ups` (optional) — anything out of scope you noticed
 
   # Step 6 — Comment on the issue
 
-  Immediately after `create_pull_request` returns, call
-  `add_issue_comment` on #{{ issue_number }} with:
-    - Status: ✅ done | ⚠️ partial | ❌ blocked
-    - Link to the PR (or to the branch if nothing changed)
-    - Anything surprising
+  After `create_pull_request` returns, call `add_issue_comment` on
+  #{{ issue_number }} with: status (✅ done | ⚠️ partial | ❌ blocked),
+  link to the PR, anything surprising.
 
-  Steps 5 and 6 are **not optional** if you pushed any files. The run
-  isn't done until both have fired.
-
-  # Rules
-  - Never close the issue directly — `Closes` on the PR does that on merge.
-  - Never force-push. Never skip hooks (no `--no-verify`).
-  - Never edit `{{ base_branch }}` directly.
-  - One issue, one PR. Out-of-scope work goes under Follow-ups, not
-    into this PR.
+  Steps 5 and 6 are not optional if any files were pushed.

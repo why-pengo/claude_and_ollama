@@ -1,5 +1,5 @@
-![Claude and Goose](assets/cng.png)
-# claude_and_goose
+![Claude and Ollama](assets/cnl.png)
+# claude_and_ollama
 
 An evaluation harness for a two-agent code workflow:
 

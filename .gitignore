@@ -16,3 +16,5 @@ Thumbs.db
 
 # Eval session logs are kept in the repo by design — do NOT ignore.
 # (evals/*/goose-session.log is part of the eval record.)
+runner/.venv/
+__pycache__/
