@@ -18,3 +18,8 @@ Thumbs.db
 # (evals/*/goose-session.log is part of the eval record.)
 runner/.venv/
 __pycache__/
+
+# Test/coverage artefacts
+.pytest_cache/
+htmlcov/
+.coverage
