@@ -7,6 +7,7 @@ recipe loading with defaults, and session-message extractors.
 
 import textwrap
 
+import httpx
 import pytest
 
 from run_recipe import (
@@ -17,6 +18,7 @@ from run_recipe import (
     _extract_issue_title,
     _tool_result_succeeded,
     load_recipe,
+    ollama_chat,
     recipe_done,
     step_aware_continue_prompt,
     template_recipe,
@@ -220,6 +222,68 @@ class TestStepAwareContinuePrompt:
         # Nothing done yet → first step's nudge is None, walk continues,
         # but second step's prereq isn't met → falls through to generic.
         assert step_aware_continue_prompt(set(), steps) == GENERIC_CONTINUE_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# ollama_chat — POSTs through a caller-owned httpx.Client (#59)
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaChat:
+    def test_uses_caller_provided_client_and_builds_url_payload(self):
+        # Regression guard for #59: ollama_chat must accept and use the
+        # client the caller passes in (so run_session can reuse a single
+        # client + connection pool across every turn), and it must build
+        # the standard OpenAI-compat URL + payload shape.
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            seen["url"] = str(request.url)
+            seen["payload"] = _json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            resp = ollama_chat(
+                client,
+                "http://bazzite.local:11434",
+                "qwen3.6:latest",
+                [{"role": "user", "content": "hi"}],
+                [{"type": "function", "function": {"name": "noop"}}],
+            )
+
+        assert seen["url"] == "http://bazzite.local:11434/v1/chat/completions"
+        assert seen["payload"]["model"] == "qwen3.6:latest"
+        assert seen["payload"]["stream"] is False
+        assert seen["payload"]["messages"] == [{"role": "user", "content": "hi"}]
+        assert seen["payload"]["tools"][0]["function"]["name"] == "noop"
+        assert resp["choices"][0]["message"]["content"] == "ok"
+
+    def test_strips_trailing_slash_from_host(self):
+        # Defensive: host=".../" should not produce "...//v1/..." with a
+        # double slash.
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["url"] = str(request.url)
+            return httpx.Response(200, json={"choices": [{"message": {"content": "x"}}]})
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            ollama_chat(client, "http://example/", "m", [], [])
+
+        assert seen["url"] == "http://example/v1/chat/completions"
+
+    def test_raises_for_status_on_http_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="boom")
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(httpx.HTTPStatusError):
+                ollama_chat(client, "http://example", "m", [], [])
 
 
 # ---------------------------------------------------------------------------
