@@ -10,12 +10,14 @@ import textwrap
 import pytest
 
 from run_recipe import (
+    GENERIC_CONTINUE_PROMPT,
     TOOL_RESULT_SIZE_CAP,
     _cap,
     _extract_branch,
     _extract_issue_title,
     load_recipe,
     recipe_done,
+    step_aware_continue_prompt,
     template_recipe,
     tools_succeeded,
 )
@@ -136,6 +138,157 @@ class TestRecipeDone:
 
 
 # ---------------------------------------------------------------------------
+# step_aware_continue_prompt — derive next-step nudge from the recipe graph
+# ---------------------------------------------------------------------------
+
+
+STEPS_FIXTURE = [
+    {
+        "id": "read_issue",
+        "advances_on": ["github__issue_read"],
+        "requires_prior": [],
+        "nudge": "NUDGE_READ_ISSUE",
+    },
+    {
+        "id": "branch",
+        "advances_on": ["github__create_branch"],
+        "requires_prior": ["read_issue"],
+        "nudge": "NUDGE_BRANCH",
+    },
+    {
+        "id": "write",
+        "advances_on": ["github__push_files", "github__create_or_update_file"],
+        "requires_prior": ["branch"],
+        "nudge": "NUDGE_WRITE",
+    },
+    {
+        "id": "pr",
+        "advances_on": ["github__create_pull_request"],
+        "requires_prior": ["write"],
+        "nudge": "NUDGE_PR",
+    },
+    {
+        "id": "comment",
+        "advances_on": ["github__add_issue_comment"],
+        "requires_prior": ["pr"],
+        "nudge": "NUDGE_COMMENT",
+    },
+]
+
+
+class TestStepAwareContinuePrompt:
+    def test_returns_first_step_nudge_when_nothing_done(self):
+        assert step_aware_continue_prompt([], STEPS_FIXTURE) == "NUDGE_READ_ISSUE"
+
+    def test_advances_to_branch_after_issue_read(self):
+        messages = [
+            _assistant_call("i1", "github__issue_read"),
+            _tool_result("i1", '{"number": 51}'),
+        ]
+        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_BRANCH"
+
+    def test_advances_to_write_after_branch(self):
+        messages = [
+            _assistant_call("i1", "github__issue_read"),
+            _tool_result("i1", '{"number": 51}'),
+            _assistant_call("b1", "github__create_branch"),
+            _tool_result("b1", "ok"),
+        ]
+        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_WRITE"
+
+    def test_advances_to_pr_after_push_files(self):
+        messages = [
+            _assistant_call("i1", "github__issue_read"),
+            _tool_result("i1", '{"number": 51}'),
+            _assistant_call("b1", "github__create_branch"),
+            _tool_result("b1", "ok"),
+            _assistant_call("w1", "github__push_files"),
+            _tool_result("w1", "Pushed"),
+        ]
+        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_PR"
+
+    def test_advances_to_pr_after_create_or_update_file(self):
+        # Either write tool counts — they share an advances_on entry
+        messages = [
+            _assistant_call("i1", "github__issue_read"),
+            _tool_result("i1", '{"number": 51}'),
+            _assistant_call("b1", "github__create_branch"),
+            _tool_result("b1", "ok"),
+            _assistant_call("w1", "github__create_or_update_file"),
+            _tool_result("w1", "Pushed"),
+        ]
+        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_PR"
+
+    def test_advances_to_comment_after_pr(self):
+        messages = [
+            _assistant_call("i1", "github__issue_read"),
+            _tool_result("i1", '{"number": 51}'),
+            _assistant_call("b1", "github__create_branch"),
+            _tool_result("b1", "ok"),
+            _assistant_call("w1", "github__push_files"),
+            _tool_result("w1", "Pushed"),
+            _assistant_call("pr1", "github__create_pull_request"),
+            _tool_result("pr1", '{"number": 71}'),
+        ]
+        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_COMMENT"
+
+    def test_falls_back_when_all_done(self):
+        messages = [
+            _assistant_call("i1", "github__issue_read"),
+            _tool_result("i1", '{"number": 51}'),
+            _assistant_call("b1", "github__create_branch"),
+            _tool_result("b1", "ok"),
+            _assistant_call("w1", "github__push_files"),
+            _tool_result("w1", "Pushed"),
+            _assistant_call("pr1", "github__create_pull_request"),
+            _tool_result("pr1", '{"number": 71}'),
+            _assistant_call("c1", "github__add_issue_comment"),
+            _tool_result("c1", "ok"),
+        ]
+        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == GENERIC_CONTINUE_PROMPT
+
+    def test_errored_pr_call_does_not_advance_to_comment(self):
+        # A failed create_pull_request must still trigger the PR nudge,
+        # not the comment nudge — the branch would orphan otherwise.
+        messages = [
+            _assistant_call("i1", "github__issue_read"),
+            _tool_result("i1", '{"number": 51}'),
+            _assistant_call("b1", "github__create_branch"),
+            _tool_result("b1", "ok"),
+            _assistant_call("w1", "github__push_files"),
+            _tool_result("w1", "Pushed"),
+            _assistant_call("pr1", "github__create_pull_request"),
+            _tool_result("pr1", "ERROR opening PR: 422"),
+        ]
+        assert step_aware_continue_prompt(messages, STEPS_FIXTURE) == "NUDGE_PR"
+
+    def test_empty_steps_returns_generic_fallback(self):
+        assert step_aware_continue_prompt([], []) == GENERIC_CONTINUE_PROMPT
+
+    def test_skips_step_with_null_nudge(self):
+        # A step without a nudge exists for prereq tracking only — the
+        # walk should continue to the next eligible step instead of
+        # falling through to the generic prompt.
+        steps = [
+            {
+                "id": "read_issue",
+                "advances_on": ["github__issue_read"],
+                "requires_prior": [],
+                "nudge": None,
+            },
+            {
+                "id": "branch",
+                "advances_on": ["github__create_branch"],
+                "requires_prior": ["read_issue"],
+                "nudge": "NUDGE_BRANCH",
+            },
+        ]
+        # Nothing done yet → first step's nudge is None, walk continues,
+        # but second step's prereq isn't met → falls through to generic.
+        assert step_aware_continue_prompt([], steps) == GENERIC_CONTINUE_PROMPT
+
+
+# ---------------------------------------------------------------------------
 # template_recipe — {{ key }} substitution
 # ---------------------------------------------------------------------------
 
@@ -181,7 +334,7 @@ class TestLoadRecipe:
                   Issue #{{ issue_number }} in {{ repo }} on {{ base_branch }}.
                 """))
         params = {"issue_number": "51"}
-        prompt, title = load_recipe(recipe, params)
+        prompt, title, _steps = load_recipe(recipe, params)
         assert title == "Execute GitHub Issue"
         assert "Issue #51 in why-pengo/claude_and_ollama on main." in prompt
         # Mutated in place so the caller can use the resolved values too
@@ -200,8 +353,90 @@ class TestLoadRecipe:
                   {{ repo }}
                 """))
         params = {"repo": "override/repo"}
-        prompt, _ = load_recipe(recipe, params)
+        prompt, _, _ = load_recipe(recipe, params)
         assert "override/repo" in prompt
+
+    def test_returns_empty_steps_when_block_absent(self, tmp_path):
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                prompt: |
+                  hi
+                """))
+        _, _, steps = load_recipe(recipe, {})
+        assert steps == []
+
+    def test_parses_steps_and_templates_nudges(self, tmp_path):
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                steps:
+                  - id: write
+                    advances_on: [github__push_files]
+                    requires_prior: [branch]
+                    nudge: |
+                      Open PR for #{{ issue_number }}.
+                prompt: |
+                  hi
+                """))
+        _, _, steps = load_recipe(recipe, {"issue_number": "42"})
+        assert steps == [
+            {
+                "id": "write",
+                "advances_on": ["github__push_files"],
+                "requires_prior": ["branch"],
+                "nudge": "Open PR for #42.\n",
+            }
+        ]
+
+    def test_coerces_scalar_advances_on_into_single_element_list(self, tmp_path):
+        # A recipe author writing `advances_on: github__issue_read` (scalar
+        # rather than a list) used to silently become a list of characters.
+        # Now coerced to ["github__issue_read"].
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                steps:
+                  - id: read_issue
+                    advances_on: github__issue_read
+                    requires_prior: branch
+                    nudge: noop
+                prompt: |
+                  hi
+                """))
+        _, _, steps = load_recipe(recipe, {})
+        assert steps[0]["advances_on"] == ["github__issue_read"]
+        assert steps[0]["requires_prior"] == ["branch"]
+
+    def test_rejects_non_string_in_advances_on_list(self, tmp_path):
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                steps:
+                  - id: read_issue
+                    advances_on: [42]
+                    nudge: noop
+                prompt: |
+                  hi
+                """))
+        with pytest.raises(TypeError, match="advances_on"):
+            load_recipe(recipe, {})
+
+    def test_rejects_unexpected_advances_on_type(self, tmp_path):
+        # A dict (or any non-str, non-list, non-None) at the field level is
+        # almost certainly an authoring typo; surface it loudly.
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                steps:
+                  - id: read_issue
+                    advances_on: {tool: github__issue_read}
+                    nudge: noop
+                prompt: |
+                  hi
+                """))
+        with pytest.raises(TypeError, match="advances_on"):
+            load_recipe(recipe, {})
 
 
 # ---------------------------------------------------------------------------

@@ -529,12 +529,42 @@ def template_recipe(prompt: str, params: dict) -> str:
     return re.sub(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}", sub, prompt)
 
 
-def load_recipe(path: Path, params: dict) -> tuple[str, str]:
-    """Returns (templated_prompt, recipe_title).
+def _as_str_list(value, *, field: str, step_id: str) -> list:
+    """Normalize a YAML scalar-or-list into list[str].
+
+    YAML lets a single-element list be written as a bare scalar
+    (`advances_on: github__issue_read`). `list("github__issue_read")` would
+    silently turn that into per-character entries, breaking step detection
+    with no error. Accept the scalar form, reject anything else loudly.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, str):
+                raise TypeError(
+                    f"step {step_id!r} {field}: expected list of strings, "
+                    f"got element {item!r} of type {type(item).__name__}"
+                )
+        return list(value)
+    raise TypeError(
+        f"step {step_id!r} {field}: expected str or list of str, "
+        f"got {type(value).__name__}: {value!r}"
+    )
+
+
+def load_recipe(path: Path, params: dict) -> tuple[str, str, list]:
+    """Returns (templated_prompt, recipe_title, steps).
 
     Mutates `params` to apply the recipe's declared parameter defaults for any
     key not explicitly passed — so a recipe author marking a parameter as
     optional-with-default works as advertised.
+
+    `steps` is the recipe's step graph (see `step_aware_continue_prompt`).
+    Each step's `nudge` is templated up-front so the session loop doesn't
+    need to thread params through.
     """
     data = yaml.safe_load(path.read_text())
     title = data.get("title", "Recipe")
@@ -546,10 +576,23 @@ def load_recipe(path: Path, params: dict) -> tuple[str, str]:
         if key and key not in params and default is not None:
             params[key] = default
 
-    return template_recipe(raw_prompt, params), title
+    steps = []
+    for s in data.get("steps") or []:
+        step_id = s["id"]
+        steps.append(
+            {
+                "id": step_id,
+                "advances_on": _as_str_list(
+                    s.get("advances_on"), field="advances_on", step_id=step_id
+                ),
+                "requires_prior": _as_str_list(
+                    s.get("requires_prior"), field="requires_prior", step_id=step_id
+                ),
+                "nudge": template_recipe(s["nudge"], params) if s.get("nudge") else None,
+            }
+        )
 
-
-FILE_WRITE_TOOLS = {"github__push_files", "github__create_or_update_file"}
+    return template_recipe(raw_prompt, params), title, steps
 
 
 def tools_succeeded(messages: list) -> set:
@@ -592,59 +635,43 @@ def recipe_done(messages: list) -> bool:
     return "github__create_pull_request" in succeeded and "github__add_issue_comment" in succeeded
 
 
-def step_aware_continue_prompt(messages: list, params: dict) -> str:
+GENERIC_CONTINUE_PROMPT = (
+    "You emitted no tool call this turn. The recipe is not complete. "
+    "Identify which step you're on (Step 0-6) and call the next tool "
+    "directly. Do not narrate. Do not summarize. Call the tool."
+)
+
+
+def step_aware_continue_prompt(messages: list, steps: list) -> str:
     """
     On a no-tool-call turn, return the most specific next-step instruction
     we can derive from session state. Catches the eval-20b/20c pattern
     where the model finishes Step 3 and stalls before Step 5/6 — generic
     "call a tool" prompts weren't enough; the model needs to be told
     WHICH tool comes next.
+
+    Walks the recipe's declared step graph in order. The first step whose
+    requires_prior steps are all done but who isn't done yet wins, and its
+    pre-templated nudge is returned. A step counts as "done" when at least
+    one of its advances_on tools returned a non-ERROR result — see
+    tools_succeeded for why error gating matters.
     """
-    # Use tools_succeeded — a tool that was called but errored shouldn't
-    # advance the step-phase detection (e.g. failed create_pull_request
-    # must not push the model toward Step 6 comment).
     succeeded = tools_succeeded(messages)
-    issue_number = params.get("issue_number", "<the issue>")
+    by_id = {s["id"]: s for s in steps}
 
-    if "github__create_pull_request" in succeeded and "github__add_issue_comment" not in succeeded:
-        return (
-            f"`github__create_pull_request` has fired. The recipe's Step 6 is now "
-            f"mandatory. Your NEXT TOOL CALL must be `github__add_issue_comment` "
-            f"on issue #{issue_number} with the PR link and a status line "
-            f"(✅ done | ⚠️ partial | ❌ blocked). Do not narrate. Call the tool."
-        )
+    def step_done(step: dict) -> bool:
+        return any(t in succeeded for t in step["advances_on"])
 
-    if FILE_WRITE_TOOLS & succeeded and "github__create_pull_request" not in succeeded:
-        return (
-            "You have committed files to the branch. Step 5 of the recipe is now "
-            "mandatory: open the PR. Your NEXT TOOL CALL must be "
-            "`github__create_pull_request`. Title: match the issue title. "
-            f"Body must include `Closes #{issue_number}`, `## Summary`, "
-            "`## Verification`, `## Subtasks`. Do not narrate. Do not summarize. "
-            "Call the tool."
-        )
+    for step in steps:
+        if step_done(step):
+            continue
+        prereqs = step.get("requires_prior", [])
+        if not all(p in by_id and step_done(by_id[p]) for p in prereqs):
+            continue
+        if step.get("nudge"):
+            return step["nudge"]
 
-    if "github__create_branch" in succeeded and not (FILE_WRITE_TOOLS & succeeded):
-        return (
-            "The branch is created. Continue with Step 3 — execute the issue's "
-            "subtask checklist. Your NEXT TOOL CALL must be `github__push_files` "
-            "(multi-file) or `github__create_or_update_file` (single-file). "
-            "Before overwriting an existing file, fetch its content first with "
-            "`github__get_file_contents` to avoid clobbering unrelated content."
-        )
-
-    if "github__issue_read" in succeeded and "github__create_branch" not in succeeded:
-        return (
-            "Issue read. Continue with Step 2 — create the branch. Your NEXT "
-            "TOOL CALL must be `github__create_branch` with name "
-            f"`runner/issue-{issue_number}-<slug>` from the integration branch."
-        )
-
-    return (
-        "You emitted no tool call this turn. The recipe is not complete. "
-        "Identify which step you're on (Step 0-6) and call the next tool "
-        "directly. Do not narrate. Do not summarize. Call the tool."
-    )
+    return GENERIC_CONTINUE_PROMPT
 
 
 def _extract_branch(messages: list) -> str | None:
@@ -762,7 +789,7 @@ def run_session(
     max_turns: int = 60,
     salvage_enabled: bool = True,
 ) -> int:
-    recipe_prompt, recipe_title = load_recipe(recipe_path, params)
+    recipe_prompt, recipe_title, recipe_steps = load_recipe(recipe_path, params)
     # load_recipe filled in YAML-declared defaults; now safe to template the
     # system prompt, which also references {{ base_branch }}.
     system_prompt = template_recipe(SYSTEM_PROMPT_PATH.read_text(), params)
@@ -839,7 +866,7 @@ def run_session(
             print(f"\n=== Recipe complete (turn {turn}) ===")
             return 0
 
-        next_prompt = step_aware_continue_prompt(messages, params)
+        next_prompt = step_aware_continue_prompt(messages, recipe_steps)
         print(f'  [runner: nudging — "{next_prompt[:80]}..."]\n')
         messages.append({"role": "user", "content": next_prompt})
 

@@ -23,6 +23,57 @@ parameters:
       target's GitHub default_branch when --params repo=... is set,
       so this only matters as a fallback.
 
+# Step graph the runner uses to derive its next-step nudge when the model
+# emits a prose-only turn. Walked in order: first step whose requires_prior
+# steps are all done but who isn't done yet wins. "Done" = at least one of
+# the step's advances_on tools returned a non-ERROR result this session.
+# Nudge text is templated against the recipe's parameters at session start.
+steps:
+  - id: read_issue
+    advances_on: [github__issue_read]
+    nudge: |
+      You have not read the issue yet. Step 1 of the recipe is mandatory:
+      your NEXT TOOL CALL must be `github__issue_read` for issue
+      #{{ issue_number }} in {{ repo }}. Do not narrate. Call the tool.
+
+  - id: branch
+    advances_on: [github__create_branch]
+    requires_prior: [read_issue]
+    nudge: |
+      Issue read. Continue with Step 2 — create the branch. Your NEXT
+      TOOL CALL must be `github__create_branch` with name
+      `runner/issue-{{ issue_number }}-<slug>` from the integration branch.
+
+  - id: write
+    advances_on: [github__push_files, github__create_or_update_file]
+    requires_prior: [branch]
+    nudge: |
+      The branch is created. Continue with Step 3 — execute the issue's
+      subtask checklist. Your NEXT TOOL CALL must be `github__push_files`
+      (multi-file) or `github__create_or_update_file` (single-file).
+      Before overwriting an existing file, fetch its content first with
+      `github__get_file_contents` to avoid clobbering unrelated content.
+
+  - id: pr
+    advances_on: [github__create_pull_request]
+    requires_prior: [write]
+    nudge: |
+      You have committed files to the branch. Step 5 of the recipe is now
+      mandatory: open the PR. Your NEXT TOOL CALL must be
+      `github__create_pull_request`. Title: match the issue title.
+      Body must include `Closes #{{ issue_number }}`, `## Summary`,
+      `## Verification`, `## Subtasks`. Do not narrate. Do not summarize.
+      Call the tool.
+
+  - id: comment
+    advances_on: [github__add_issue_comment]
+    requires_prior: [pr]
+    nudge: |
+      `github__create_pull_request` has fired. The recipe's Step 6 is now
+      mandatory. Your NEXT TOOL CALL must be `github__add_issue_comment`
+      on issue #{{ issue_number }} with the PR link and a status line
+      (✅ done | ⚠️ partial | ❌ blocked). Do not narrate. Call the tool.
+
 prompt: |
   You are executing GitHub issue #{{ issue_number }} in {{ repo }}.
   Operating rules are in your system context — already loaded.
