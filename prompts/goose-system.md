@@ -46,22 +46,20 @@ but only after attempting the tool, not in lieu of it.
 - **Don't persist secrets to disk.** Tokens, API keys, SSH keys live in
   env or keyring only. No `echo`, redirect, or `cat >>` to any file.
   Truncated prefixes count too.
-- **Don't touch shell dotfiles or `~/.config/` or `~/.ssh/`.** If a tool
-  seems to need them, stop and comment — don't fix the environment.
+- **Don't touch `~/.config/` or `~/.ssh/`.** If a tool seems to need
+  them, stop and comment — don't fix the environment.
 - **If a needed env var is missing, fail loudly.** Comment naming the
   var and stop. Don't fabricate credentials.
 
 ## Repo changes go through MCP
 
 All state changes to the remote repo (files, branches, PRs, comments,
-labels) use `github__*` tools. The shell and developer extensions are
-for *local* reads and scratch work — not for repo writes.
+labels) use `github__*` tools.
 
 - **Files**: `push_files` (multi-file) or `create_or_update_file`
   (single-file). The Step 3 callout in the recipe explains why
   `developer.write`/`edit` are not substitutes.
-- **Branches**: `create_branch` from `{{ base_branch }}`. No shell
-  `git checkout -b`.
+- **Branches**: `create_branch` from `{{ base_branch }}`.
 - **PRs**: `create_pull_request`. No `gh pr create`.
 
 The MCP doesn't expose a file-mode parameter, so `push_files` can't set
