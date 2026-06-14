@@ -1,9 +1,11 @@
 # Harness complexity audit
 
-Working artifact for the discussion that emerged from eval-17 (qwen3.6
+Reference artifact for the discussion that emerged from eval-17 (qwen3.6
 reliability regression) and eval-18 (devstral failing under harness load
-despite curl-probe success). Not for merge — this is the diff proposal
-for argument, not the change itself.
+despite curl-probe success). The cuts proposed here landed in commit
+6f1e55a; the eval-19 series tested them; the Step 3 callout was restored
+in 9f6631d after over-cut evidence. Keep this doc as the record of *why*
+those edits happened.
 
 ## TL;DR
 

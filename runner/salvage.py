@@ -14,12 +14,18 @@ the verification work was not done by the model.
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 from gh import _gh
 
 
+def _q(value: str) -> str:
+    """URL-encode a value that may contain `/` (e.g. branch names like goose/issue-N-slug)."""
+    return quote(value, safe="")
+
+
 def _branch_exists(repo: str, branch: str) -> bool:
-    rc, _, _ = _gh(["api", f"repos/{repo}/branches/{branch}"])
+    rc, _, _ = _gh(["api", f"repos/{repo}/branches/{_q(branch)}"])
     return rc == 0
 
 
@@ -27,7 +33,7 @@ def _branch_commits(repo: str, branch: str, base_branch: str) -> list[str]:
     """Commit subjects on `branch` not on `base_branch`, oldest-first."""
     rc, out, _ = _gh([
         "api",
-        f"repos/{repo}/compare/{base_branch}...{branch}",
+        f"repos/{repo}/compare/{_q(base_branch)}...{_q(branch)}",
         "--jq", "[.commits[].commit.message] | map(split(\"\\n\")[0])",
     ])
     if rc != 0 or not out.strip():
@@ -42,7 +48,7 @@ def _open_pr_for_branch(repo: str, branch: str) -> int | None:
     owner = repo.split("/")[0]
     rc, out, _ = _gh([
         "api",
-        f"repos/{repo}/pulls?state=open&head={owner}:{branch}",
+        f"repos/{repo}/pulls?state=open&head={_q(owner)}:{_q(branch)}",
         "--jq", ".[0].number // empty",
     ])
     if rc != 0 or not out.strip():
