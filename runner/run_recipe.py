@@ -182,19 +182,30 @@ TOOL_SCHEMAS = [
 # Tool implementations — thin wrappers around `gh` CLI
 # ---------------------------------------------------------------------------
 
-# Maximum size of a tool result before truncation. Tool results get appended to
-# `messages` and re-sent to Ollama on every subsequent turn, so an unbounded
-# 100KB lockfile fetch on turn 3 keeps costing context for the rest of the
-# session. 16KB covers most legitimate source files; pathological cases get
-# truncated with a size hint so the model knows the read was partial.
+# Maximum on-wire byte size of a tool result before truncation. Tool results
+# get appended to `messages` and re-sent to Ollama on every subsequent turn,
+# so an unbounded 100KB lockfile fetch on turn 3 keeps costing context for
+# the rest of the session. 16KB covers most legitimate source files;
+# pathological cases get truncated with a size hint so the model knows the
+# read was partial. The cap is a soft target — the appended marker adds
+# ~60 bytes on the truncation path.
 TOOL_RESULT_SIZE_CAP = 16384
 
 
 def _cap(content: str) -> str:
-    if len(content) <= TOOL_RESULT_SIZE_CAP:
+    """Truncate tool-result content to TOOL_RESULT_SIZE_CAP UTF-8 bytes.
+
+    Operates on encoded bytes (not str codepoints), so multi-byte characters
+    don't blow past the cap on the wire. errors="ignore" on the decode trims
+    any partial multi-byte sequence the slice landed inside, preventing
+    invalid UTF-8 in the returned string.
+    """
+    encoded = content.encode("utf-8")
+    if len(encoded) <= TOOL_RESULT_SIZE_CAP:
         return content
-    return content[:TOOL_RESULT_SIZE_CAP] + (
-        f"\n\n... [truncated by runner; full content was {len(content)} bytes]"
+    truncated = encoded[:TOOL_RESULT_SIZE_CAP].decode("utf-8", errors="ignore")
+    return truncated + (
+        f"\n\n... [truncated by runner; full content was {len(encoded)} bytes]"
     )
 
 
