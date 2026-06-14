@@ -1,12 +1,11 @@
-version: "1.0.0"
 title: Plan an Epic
 description: |
   Decompose a high-level brief into an epic issue plus child task
-  issues conforming to the claude_and_goose issue format.
+  issues conforming to the claude_and_ollama issue format.
 
   STUB — Claude Code currently authors issues directly. This recipe
-  exists so we can experiment with delegating issue authoring to Goose
-  in a later eval. Not wired up yet.
+  exists so we can experiment with delegating issue authoring to the
+  runner in a later eval. Not wired up yet.
 
 parameters:
   - key: brief
@@ -16,30 +15,18 @@ parameters:
   - key: repo
     input_type: string
     requirement: optional
-    default: why-pengo/claude_and_goose
+    default: why-pengo/claude_and_ollama
     description: owner/repo to file issues against
-
-extensions:
-  - type: builtin
-    name: developer
-    timeout: 300
-  - type: stdio
-    name: github
-    cmd: github-mcp-server
-    args:
-      - stdio
-    # No `envs:` block — see recipes/execute-issue.yaml for rationale.
-    timeout: 300
 
 prompt: |
   TODO: this recipe is a placeholder.
 
-  When we're ready to delegate issue authoring to Goose, this prompt
-  should:
+  When we're ready to delegate issue authoring to the runner, this
+  prompt should:
     1. Read prompts/issue-format.md in full.
     2. Decompose `{{ brief }}` into an epic + leaf issues.
-    3. File them in {{ repo }} via the github extension with the
-       correct labels (epic / goose-task) and dependency links.
+    3. File them in {{ repo }} via the github__* tools with the
+       correct labels (epic / runner-task) and dependency links.
     4. Print the list of created issue numbers.
 
   Until that's drafted, this recipe should not be run.

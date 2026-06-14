@@ -173,7 +173,7 @@ class TestLoadRecipe:
                     requirement: required
                   - key: repo
                     requirement: optional
-                    default: why-pengo/claude_and_goose
+                    default: why-pengo/claude_and_ollama
                   - key: base_branch
                     requirement: optional
                     default: main
@@ -183,9 +183,9 @@ class TestLoadRecipe:
         params = {"issue_number": "51"}
         prompt, title = load_recipe(recipe, params)
         assert title == "Execute GitHub Issue"
-        assert "Issue #51 in why-pengo/claude_and_goose on main." in prompt
+        assert "Issue #51 in why-pengo/claude_and_ollama on main." in prompt
         # Mutated in place so the caller can use the resolved values too
-        assert params["repo"] == "why-pengo/claude_and_goose"
+        assert params["repo"] == "why-pengo/claude_and_ollama"
         assert params["base_branch"] == "main"
 
     def test_explicit_params_win_over_defaults(self, tmp_path):
@@ -219,13 +219,13 @@ class TestExtractBranch:
                         "id": "b1",
                         "function": {
                             "name": "github__create_branch",
-                            "arguments": '{"branch": "goose/issue-51-foo", "from_branch": "develop"}',
+                            "arguments": '{"branch": "runner/issue-51-foo", "from_branch": "develop"}',
                         },
                     }
                 ],
             },
         ]
-        assert _extract_branch(messages) == "goose/issue-51-foo"
+        assert _extract_branch(messages) == "runner/issue-51-foo"
 
     def test_returns_none_when_no_create_branch(self):
         messages = [

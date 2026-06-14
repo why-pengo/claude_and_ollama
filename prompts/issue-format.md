@@ -1,8 +1,8 @@
-# Issue Format for Goose-Executable Tasks
+# Issue Format for Runner-Executable Tasks
 
-Every issue tagged `goose-task` must follow this template. Issues
-that don't conform should be rejected by Goose with a request for the
-missing pieces.
+Every issue tagged `runner-task` must follow this template. Issues
+that don't conform should be rejected by the runner with a request
+for the missing pieces.
 
 ---
 
@@ -36,7 +36,7 @@ implementation details — those belong in subtasks.
 
 ### 3. Context
 
-Anything Goose can't infer from the codebase:
+Anything the runner can't infer from the codebase:
 
 - Links to related issues / prior PRs
 - File paths to read before starting
@@ -62,18 +62,10 @@ Bulleted list of **observable outcomes**:
 - `note.py` exposes `parse_frontmatter(text) -> dict`
 - README has a usage example under "Front-matter"
 
-Goose runs every check before opening a PR.
+The runner runs every check before opening a PR.
 
 ### 6. Out of scope
 
-Explicit list of things Goose should NOT do. Closes the loop on scope
-creep. Items that surface during execution go in the PR's
+Explicit list of things the runner should NOT do. Closes the loop on
+scope creep. Items that surface during execution go in the PR's
 `## Follow-ups` section, not into the current PR.
-
----
-
-## Example
-
-See issue #1 (`Eval #1 — Validate end-to-end Claude Code → Goose
-workflow`) for the first end-to-end example used to shake out this
-harness.

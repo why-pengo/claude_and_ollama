@@ -20,7 +20,7 @@ from gh import _gh
 
 
 def _q(value: str) -> str:
-    """URL-encode a value that may contain `/` (e.g. branch names like goose/issue-N-slug)."""
+    """URL-encode a value that may contain `/` (e.g. branch names like runner/issue-N-slug)."""
     return quote(value, safe="")
 
 

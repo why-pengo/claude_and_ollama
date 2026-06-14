@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-Direct-Ollama recipe runner — proof-of-concept replacement for `goose run`.
+Direct-Ollama recipe runner — executor for the claude_and_ollama harness.
 
-Built to test the hypothesis from eval-17/eval-19 series: that Goose's
-session-loop choice to exit-0 on "no tool call this turn" is the
-structural reliability ceiling. This runner owns the session loop and
-prompts the model to continue when it emits no tool call — rather than
-treating the empty turn as completion.
+Owns the session loop: calls Ollama directly via the OpenAI-compat endpoint
+and prompts the model to continue when it emits no tool call. Implements
+7 GitHub tools as wrappers around the `gh` CLI.
 
-Same recipe YAML and prompts as Goose uses. Calls Ollama directly via
-the OpenAI-compat endpoint. Implements 7 github tools as wrappers
-around `gh` CLI.
+The runner replaced an earlier Goose-based executor whose session loop
+exited-0 silently on any prose-only turn — that's the reliability ceiling
+the eval-17/eval-19/eval-20 series traced and that this runner removes.
 
 Usage:
     python runner/run_recipe.py \\
@@ -36,7 +34,7 @@ from gh import _gh
 from salvage import salvage_comment, salvage_pr
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SYSTEM_PROMPT_PATH = REPO_ROOT / "prompts" / "goose-system.md"
+SYSTEM_PROMPT_PATH = REPO_ROOT / "prompts" / "system-prompt.md"
 
 # These match what Goose's github MCP exposes today, by name.
 # Argument shapes match what the model has seen across eval-14 etc.
@@ -639,7 +637,7 @@ def step_aware_continue_prompt(messages: list, params: dict) -> str:
         return (
             "Issue read. Continue with Step 2 — create the branch. Your NEXT "
             "TOOL CALL must be `github__create_branch` with name "
-            f"`goose/issue-{issue_number}-<slug>` from the integration branch."
+            f"`runner/issue-{issue_number}-<slug>` from the integration branch."
         )
 
     return (

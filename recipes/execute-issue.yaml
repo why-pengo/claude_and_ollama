@@ -1,7 +1,6 @@
-version: "1.0.0"
 title: Execute GitHub Issue
 description: |
-  Read a GitHub issue conforming to the claude_and_goose issue format
+  Read a GitHub issue conforming to the claude_and_ollama issue format
   (see prompts/issue-format.md), execute its subtask checklist,
   comment with results, and open a PR if files were changed.
 
@@ -13,7 +12,7 @@ parameters:
   - key: repo
     input_type: string
     requirement: optional
-    default: why-pengo/claude_and_goose
+    default: why-pengo/claude_and_ollama
     description: owner/repo to run against
   - key: base_branch
     input_type: string
@@ -21,24 +20,9 @@ parameters:
     default: main
     description: |
       Integration branch of the target repo. Branches are created
-      from this; PRs target this. The wrapper script auto-resolves
-      it from the target's GitHub default_branch and passes it via
-      --params. Defaults to `main` for self-runs against the harness
-      where the wrapper isn't involved.
-
-extensions:
-  - type: builtin
-    name: developer
-    timeout: 600
-  - type: stdio
-    name: github
-    cmd: github-mcp-server
-    args:
-      - stdio
-    # No `envs:` block — Goose's extension envs map doesn't expand
-    # ${VAR}, so values land literally. MCP stdio subprocess inherits
-    # parent env; export GITHUB_PERSONAL_ACCESS_TOKEN before `goose run`.
-    timeout: 300
+      from this; PRs target it. The runner auto-resolves it from the
+      target's GitHub default_branch when --params repo=... is set,
+      so this only matters for self-runs against the harness.
 
 prompt: |
   You are executing GitHub issue #{{ issue_number }} in {{ repo }}.
@@ -57,7 +41,7 @@ prompt: |
   touches. 404 = no AGENTS.md in this repo; skip and move on.
 
   On conflict: target repo wins for facts (paths, style, naming);
-  `goose-system.md` wins for safety rules.
+  the system prompt wins for safety rules.
 
   # Step 1 — Read the issue
   Fetch issue #{{ issue_number }} from {{ repo }}. Read the full body
@@ -68,18 +52,14 @@ prompt: |
   missing pieces. Don't guess scope.
 
   # Step 2 — Branch
-  `create_branch goose/issue-{{ issue_number }}-<slug>` from
+  `create_branch runner/issue-{{ issue_number }}-<slug>` from
   `{{ base_branch }}`. Slug is 3–5 kebab-case words from the issue
   title.
 
   # Step 3 — Execute subtasks in order
 
-  **Push files via the github extension.** `push_files` /
-  `create_or_update_file` are the only tools that commit to the
-  branch. The developer extension's `write` / `edit` modify the
-  container's filesystem (the harness, not the target repo) — they
-  do not push. If you use them for code that needs to land, the
-  branch stays empty and Steps 5–6 have nothing to fire on.
+  **`push_files` and `create_or_update_file` are the only tools that
+  commit to the branch.** Nothing else lands code on the target repo.
 
   Before overwriting an existing file in the target repo, fetch its
   current content first — don't rewrite from memory.

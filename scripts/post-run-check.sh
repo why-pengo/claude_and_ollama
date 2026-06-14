@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# post-run-check.sh — Verify a Goose run produced real artifacts.
+# post-run-check.sh — Verify a runner-driven eval produced real artifacts.
 #
 # Usage:
 #   ./scripts/post-run-check.sh 32                    # default session log
@@ -14,12 +14,14 @@ set -euo pipefail
 
 ISSUE_NUMBER="${1:?Usage: $0 ISSUE_NUMBER [SESSION_LOG_PATH]}"
 
-# Default-log discovery (macOS/BSD-compatible)
+# Default-log discovery (macOS/BSD-compatible). Matches both the runner-era
+# session.log and the Goose-era goose-session.log for backward compatibility
+# with the historical eval corpus.
 if [ -z "${2:-}" ]; then
-  SESSION_LOG_PATH=$(find evals -name 'goose-session*.log' -type f -print 2>/dev/null \
+  SESSION_LOG_PATH=$(find evals \( -name 'session.log' -o -name 'goose-session*.log' \) -type f -print 2>/dev/null \
     | xargs ls -t 2>/dev/null | head -1 || true)
   if [ -z "${SESSION_LOG_PATH:-}" ] || [ ! -f "$SESSION_LOG_PATH" ]; then
-    echo "No session log found under evals/ matching goose-session*.log" >&2
+    echo "No session log found under evals/ matching session.log or goose-session*.log" >&2
     exit 1
   fi
 else
@@ -44,7 +46,7 @@ fi
 
 # --- Check 2: Branch on remote ---
 br_count=$(gh api "repos/${GH_OWNER}/${GH_REPO}/branches" --jq '.[].name' 2>/dev/null \
-  | grep -c "^goose/issue-${ISSUE_NUMBER}-" || true)
+  | grep -cE "^(runner|goose)/issue-${ISSUE_NUMBER}-" || true)
 if [ "$br_count" -ge 1 ]; then
   echo "[CHECK 2] Branch on remote: PASS ($br_count branches)"
   CHECK_2_PASS=true
