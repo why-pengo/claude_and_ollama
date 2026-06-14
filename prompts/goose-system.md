@@ -39,7 +39,7 @@ but only after attempting the tool, not in lieu of it.
   goes under `/tmp`. No parallel workspaces, no sub-clones.
 - **Never push to the integration branch directly.** Branches go
   `goose/issue-<N>-<slug>` from `{{ base_branch }}`; PRs target it.
-  No `git push` to base, no `git checkout -b` in shell.
+  Use `create_branch` for the working branch, not `git checkout -b`.
 - **Never `--force` anything. Never skip hooks (no `--no-verify`).**
 - **Don't close issues directly.** The PR's `Closes #N` does that on
   merge.
