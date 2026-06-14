@@ -389,6 +389,55 @@ class TestLoadRecipe:
             }
         ]
 
+    def test_coerces_scalar_advances_on_into_single_element_list(self, tmp_path):
+        # A recipe author writing `advances_on: github__issue_read` (scalar
+        # rather than a list) used to silently become a list of characters.
+        # Now coerced to ["github__issue_read"].
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                steps:
+                  - id: read_issue
+                    advances_on: github__issue_read
+                    requires_prior: branch
+                    nudge: noop
+                prompt: |
+                  hi
+                """))
+        _, _, steps = load_recipe(recipe, {})
+        assert steps[0]["advances_on"] == ["github__issue_read"]
+        assert steps[0]["requires_prior"] == ["branch"]
+
+    def test_rejects_non_string_in_advances_on_list(self, tmp_path):
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                steps:
+                  - id: read_issue
+                    advances_on: [42]
+                    nudge: noop
+                prompt: |
+                  hi
+                """))
+        with pytest.raises(TypeError, match="advances_on"):
+            load_recipe(recipe, {})
+
+    def test_rejects_unexpected_advances_on_type(self, tmp_path):
+        # A dict (or any non-str, non-list, non-None) at the field level is
+        # almost certainly an authoring typo; surface it loudly.
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                steps:
+                  - id: read_issue
+                    advances_on: {tool: github__issue_read}
+                    nudge: noop
+                prompt: |
+                  hi
+                """))
+        with pytest.raises(TypeError, match="advances_on"):
+            load_recipe(recipe, {})
+
 
 # ---------------------------------------------------------------------------
 # _extract_branch / _extract_issue_title — session-message extractors

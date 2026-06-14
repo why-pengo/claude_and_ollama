@@ -529,6 +529,32 @@ def template_recipe(prompt: str, params: dict) -> str:
     return re.sub(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}", sub, prompt)
 
 
+def _as_str_list(value, *, field: str, step_id: str) -> list:
+    """Normalize a YAML scalar-or-list into list[str].
+
+    YAML lets a single-element list be written as a bare scalar
+    (`advances_on: github__issue_read`). `list("github__issue_read")` would
+    silently turn that into per-character entries, breaking step detection
+    with no error. Accept the scalar form, reject anything else loudly.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, str):
+                raise TypeError(
+                    f"step {step_id!r} {field}: expected list of strings, "
+                    f"got element {item!r} of type {type(item).__name__}"
+                )
+        return list(value)
+    raise TypeError(
+        f"step {step_id!r} {field}: expected str or list of str, "
+        f"got {type(value).__name__}: {value!r}"
+    )
+
+
 def load_recipe(path: Path, params: dict) -> tuple[str, str, list]:
     """Returns (templated_prompt, recipe_title, steps).
 
@@ -552,11 +578,16 @@ def load_recipe(path: Path, params: dict) -> tuple[str, str, list]:
 
     steps = []
     for s in data.get("steps") or []:
+        step_id = s["id"]
         steps.append(
             {
-                "id": s["id"],
-                "advances_on": list(s.get("advances_on") or []),
-                "requires_prior": list(s.get("requires_prior") or []),
+                "id": step_id,
+                "advances_on": _as_str_list(
+                    s.get("advances_on"), field="advances_on", step_id=step_id
+                ),
+                "requires_prior": _as_str_list(
+                    s.get("requires_prior"), field="requires_prior", step_id=step_id
+                ),
                 "nudge": template_recipe(s["nudge"], params) if s.get("nudge") else None,
             }
         )
