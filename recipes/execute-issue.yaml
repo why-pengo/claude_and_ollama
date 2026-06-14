@@ -11,9 +11,8 @@ parameters:
     description: GitHub issue number to execute (e.g. "1")
   - key: repo
     input_type: string
-    requirement: optional
-    default: why-pengo/claude_and_ollama
-    description: owner/repo to run against
+    requirement: required
+    description: owner/repo to run against (e.g. why-pengo/health_track)
   - key: base_branch
     input_type: string
     requirement: optional
@@ -22,11 +21,15 @@ parameters:
       Integration branch of the target repo. Branches are created
       from this; PRs target it. The runner auto-resolves it from the
       target's GitHub default_branch when --params repo=... is set,
-      so this only matters for self-runs against the harness.
+      so this only matters as a fallback.
 
 prompt: |
   You are executing GitHub issue #{{ issue_number }} in {{ repo }}.
   Operating rules are in your system context — already loaded.
+
+  Tool names use the `github__` prefix (`github__issue_read`,
+  `github__push_files`, etc.). Names below are shown unprefixed for
+  readability; call them with the full prefixed names.
 
   **Your first tool call is Step 0.** Don't narrate. Call the tool.
 
@@ -34,8 +37,8 @@ prompt: |
   from it; the PR you open targets it.
 
   # Step 0 — Load target-repo guidance
-  Try `get_file_contents` for `AGENTS.md` (root). If it exists, its
-  body is additional system guidance — including pointers to any
+  Try `github__get_file_contents` for `AGENTS.md` (root). If it exists,
+  its body is additional system guidance — including pointers to any
   area-specific files (`backend/AGENTS.md`, `frontend/AGENTS.md`,
   etc.) you should read next based on what the issue actually
   touches. 404 = no AGENTS.md in this repo; skip and move on.
@@ -44,30 +47,33 @@ prompt: |
   the system prompt wins for safety rules.
 
   # Step 1 — Read the issue
-  Fetch issue #{{ issue_number }} from {{ repo }}. Read the full body
-  and the files its Context section points at.
+  Fetch issue #{{ issue_number }} from {{ repo }} via
+  `github__issue_read`. Read the full body and the files its Context
+  section points at.
 
   If a required section is missing (Goal, Context, Subtasks,
   Acceptance criteria, Out of scope), STOP and comment asking for the
   missing pieces. Don't guess scope.
 
   # Step 2 — Branch
-  `create_branch runner/issue-{{ issue_number }}-<slug>` from
-  `{{ base_branch }}`. Slug is 3–5 kebab-case words from the issue
-  title.
+  Call `github__create_branch` with name
+  `runner/issue-{{ issue_number }}-<slug>` from `{{ base_branch }}`.
+  Slug is 3–5 kebab-case words from the issue title.
 
   # Step 3 — Execute subtasks in order
 
-  **`push_files` and `create_or_update_file` are the only tools that
-  commit to the branch.** Nothing else lands code on the target repo.
+  **`github__push_files` and `github__create_or_update_file` are the
+  only tools that commit to the branch.** Nothing else lands code on
+  the target repo.
 
   Before overwriting an existing file in the target repo, fetch its
-  current content first — don't rewrite from memory.
+  current content first with `github__get_file_contents` — don't
+  rewrite from memory.
 
   For each checklist item:
-    - Make the change via `push_files` or `create_or_update_file`
-      with a conventional-commit message (`feat:`, `fix:`, `test:`,
-      `docs:`, `refactor:`).
+    - Make the change via `github__push_files` or
+      `github__create_or_update_file` with a conventional-commit
+      message (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`).
     - Verify it (run the test, build, or command the issue lists).
 
   Stop and comment if a subtask is ambiguous. If a subtask fails
@@ -79,8 +85,9 @@ prompt: |
 
   # Step 5 — Open the PR
 
-  The moment your last file is pushed, call `create_pull_request`.
-  Title matches the issue title. Body, in order:
+  The moment your last file is pushed, call
+  `github__create_pull_request`. Title matches the issue title. Body,
+  in order:
 
     - `Closes #{{ issue_number }}`
     - `## Summary` — what changed, 2–4 bullets
@@ -93,8 +100,9 @@ prompt: |
 
   # Step 6 — Comment on the issue
 
-  After `create_pull_request` returns, call `add_issue_comment` on
-  #{{ issue_number }} with: status (✅ done | ⚠️ partial | ❌ blocked),
-  link to the PR, anything surprising.
+  After `github__create_pull_request` returns, call
+  `github__add_issue_comment` on #{{ issue_number }} with: status
+  (✅ done | ⚠️ partial | ❌ blocked), link to the PR, anything
+  surprising.
 
   Steps 5 and 6 are not optional if any files were pushed.

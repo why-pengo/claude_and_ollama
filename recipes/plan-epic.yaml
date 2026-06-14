@@ -14,9 +14,8 @@ parameters:
     description: One-paragraph description of the work
   - key: repo
     input_type: string
-    requirement: optional
-    default: why-pengo/claude_and_ollama
-    description: owner/repo to file issues against
+    requirement: required
+    description: owner/repo to file issues against (e.g. why-pengo/health_track)
 
 prompt: |
   TODO: this recipe is a placeholder.

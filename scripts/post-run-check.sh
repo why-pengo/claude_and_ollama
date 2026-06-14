@@ -16,10 +16,12 @@ ISSUE_NUMBER="${1:?Usage: $0 ISSUE_NUMBER [SESSION_LOG_PATH]}"
 
 # Default-log discovery (macOS/BSD-compatible). Matches both the runner-era
 # session.log and the Goose-era goose-session.log for backward compatibility
-# with the historical eval corpus.
+# with the historical eval corpus. -exec ... + only invokes ls when at least
+# one file matched, avoiding the `xargs ls` empty-args footgun that would
+# otherwise list CWD and pick an unrelated file.
 if [ -z "${2:-}" ]; then
-  SESSION_LOG_PATH=$(find evals \( -name 'session.log' -o -name 'goose-session*.log' \) -type f -print 2>/dev/null \
-    | xargs ls -t 2>/dev/null | head -1 || true)
+  SESSION_LOG_PATH=$(find evals \( -name 'session.log' -o -name 'goose-session*.log' \) -type f \
+    -exec ls -t {} + 2>/dev/null | head -1 || true)
   if [ -z "${SESSION_LOG_PATH:-}" ] || [ ! -f "$SESSION_LOG_PATH" ]; then
     echo "No session log found under evals/ matching session.log or goose-session*.log" >&2
     exit 1
