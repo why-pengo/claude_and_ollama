@@ -5,7 +5,9 @@ import subprocess
 DEFAULT_TIMEOUT = 120
 
 
-def _gh(args: list[str], stdin: str | None = None, timeout: int = DEFAULT_TIMEOUT) -> tuple[int, str, str]:
+def _gh(
+    args: list[str], stdin: str | None = None, timeout: int = DEFAULT_TIMEOUT
+) -> tuple[int, str, str]:
     """Invoke `gh` and return (returncode, stdout, stderr).
 
     Raises subprocess.TimeoutExpired if gh takes longer than `timeout` seconds.

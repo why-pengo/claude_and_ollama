@@ -31,11 +31,14 @@ def _branch_exists(repo: str, branch: str) -> bool:
 
 def _branch_commits(repo: str, branch: str, base_branch: str) -> list[str]:
     """Commit subjects on `branch` not on `base_branch`, oldest-first."""
-    rc, out, _ = _gh([
-        "api",
-        f"repos/{repo}/compare/{_q(base_branch)}...{_q(branch)}",
-        "--jq", "[.commits[].commit.message] | map(split(\"\\n\")[0])",
-    ])
+    rc, out, _ = _gh(
+        [
+            "api",
+            f"repos/{repo}/compare/{_q(base_branch)}...{_q(branch)}",
+            "--jq",
+            '[.commits[].commit.message] | map(split("\\n")[0])',
+        ]
+    )
     if rc != 0 or not out.strip():
         return []
     try:
@@ -46,11 +49,14 @@ def _branch_commits(repo: str, branch: str, base_branch: str) -> list[str]:
 
 def _open_pr_for_branch(repo: str, branch: str) -> int | None:
     owner = repo.split("/")[0]
-    rc, out, _ = _gh([
-        "api",
-        f"repos/{repo}/pulls?state=open&head={_q(owner)}:{_q(branch)}",
-        "--jq", ".[0].number // empty",
-    ])
+    rc, out, _ = _gh(
+        [
+            "api",
+            f"repos/{repo}/pulls?state=open&head={_q(owner)}:{_q(branch)}",
+            "--jq",
+            ".[0].number // empty",
+        ]
+    )
     if rc != 0 or not out.strip():
         return None
     try:
@@ -110,18 +116,27 @@ def salvage_pr(
         f"`github__create_pull_request` this session."
     )
 
-    payload = json.dumps({
-        "title": issue_title,
-        "body": body,
-        "head": branch,
-        "base": base_branch,
-    })
-    rc, out, err = _gh([
-        "api", "-X", "POST",
-        f"repos/{repo}/pulls",
-        "--input", "-",
-        "--jq", "{number, url: .html_url}",
-    ], stdin=payload)
+    payload = json.dumps(
+        {
+            "title": issue_title,
+            "body": body,
+            "head": branch,
+            "base": base_branch,
+        }
+    )
+    rc, out, err = _gh(
+        [
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/pulls",
+            "--input",
+            "-",
+            "--jq",
+            "{number, url: .html_url}",
+        ],
+        stdin=payload,
+    )
     if rc != 0:
         return {"status": "error", "error": err.strip()}
 
@@ -148,12 +163,19 @@ def salvage_comment(repo: str, issue_number: int, pr_url: str) -> str | None:
         f"criteria before merging."
     )
     payload = json.dumps({"body": body})
-    rc, out, _ = _gh([
-        "api", "-X", "POST",
-        f"repos/{repo}/issues/{issue_number}/comments",
-        "--input", "-",
-        "--jq", ".html_url",
-    ], stdin=payload)
+    rc, out, _ = _gh(
+        [
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/issues/{issue_number}/comments",
+            "--input",
+            "-",
+            "--jq",
+            ".html_url",
+        ],
+        stdin=payload,
+    )
     if rc != 0 or not out.strip():
         return None
     return out.strip()

@@ -144,6 +144,23 @@ Use `scripts/new-eval.sh <N>` to scaffold the directory.
 
 ---
 
+## Tests & dev workflow
+
+Runner tests live in `tests/` (top-level), driven by pytest. Config in
+`pyproject.toml` and `.flake8`.
+
+Common targets — `make help` for the full list:
+- `make install-dev` — create `runner/.venv` and install deps
+- `make check` — format-check + lint (read-only, safe for CI)
+- `make format` — apply isort + black
+- `make test` — run pytest
+- `make test-cov` — run with coverage, HTML report under `htmlcov/`
+- `make ci` — full pipeline: `check` + `test`
+
+Run `make ci` before opening a PR.
+
+---
+
 ## What This Repo Is Not
 
 - Not a target project. Goose recipes act on *other* repos (cloned
