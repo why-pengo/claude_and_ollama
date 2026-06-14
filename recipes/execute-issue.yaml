@@ -42,8 +42,7 @@ extensions:
 
 prompt: |
   You are executing GitHub issue #{{ issue_number }} in {{ repo }}.
-  Operating rules are in your system context. Don't shell-cat
-  `goose-system.md` — it's already loaded.
+  Operating rules are in your system context — already loaded.
 
   **Your first tool call is Step 0.** Don't narrate. Call the tool.
 

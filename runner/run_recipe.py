@@ -9,8 +9,8 @@ prompts the model to continue when it emits no tool call — rather than
 treating the empty turn as completion.
 
 Same recipe YAML and prompts as Goose uses. Calls Ollama directly via
-the OpenAI-compat endpoint. Implements the same ~8 github tools as
-wrappers around `gh` CLI, plus a read-only shell tool.
+the OpenAI-compat endpoint. Implements 7 github tools as wrappers
+around `gh` CLI.
 
 Usage:
     python runner/run_recipe.py \\
@@ -26,7 +26,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -176,27 +175,7 @@ TOOL_SCHEMAS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "shell",
-            "description": "Run a read-only shell command (ls, cat, grep, find, etc.). No writes.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string"},
-                },
-                "required": ["command"],
-            },
-        },
-    },
 ]
-
-SHELL_WRITE_BLOCKLIST = re.compile(
-    r"\b(rm|mv|chmod|chown|dd|mkfs|fdisk|>>?\s|tee\b|"
-    r"git\s+push|git\s+commit|git\s+reset|git\s+rebase|"
-    r"echo\s+.+>|cp\s+.+\s+/|truncate)"
-)
 
 
 # ---------------------------------------------------------------------------
@@ -402,21 +381,6 @@ def github_add_issue_comment(args: dict) -> str:
     return out.strip()
 
 
-def shell(args: dict) -> str:
-    cmd = args["command"]
-    if SHELL_WRITE_BLOCKLIST.search(cmd):
-        return "ERROR: write-shaped command blocked by runner policy. Use github_* tools for repo writes."
-    proc = subprocess.run(
-        ["bash", "-c", cmd],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=str(REPO_ROOT),
-    )
-    output = proc.stdout + (proc.stderr if proc.stderr else "")
-    return output[:8000]  # truncate to keep context bounded
-
-
 DISPATCH = {
     "github__issue_read": github_issue_read,
     "github__get_file_contents": github_get_file_contents,
@@ -425,7 +389,6 @@ DISPATCH = {
     "github__push_files": github_push_files,
     "github__create_pull_request": github_create_pull_request,
     "github__add_issue_comment": github_add_issue_comment,
-    "shell": shell,
 }
 
 
