@@ -51,11 +51,22 @@ fi
 # OLLAMA_NUM_PARALLEL=1     → serial workload — avoids duplicate KV cache
 #                             per parallel slot. The runner only ever has
 #                             one in-flight chat call at a time.
+# OLLAMA_DEBUG=1            → DEBUG-level logging. Surfaces model-load
+#                             internals (actual weights + KV cache size,
+#                             num_gpu split chosen, anything spilling to
+#                             CPU). Wanted during the #47 bake-off to
+#                             validate the per-candidate VRAM math under
+#                             the new f16-KV regime. Remove after #47
+#                             closes — log file grows fast and the noise
+#                             dilutes post-mortem signal once the question
+#                             "did this actually fit?" is settled. Bump to
+#                             =2 only if =1 doesn't show what you need.
 
 export OLLAMA_FLASH_ATTENTION=1
 export OLLAMA_HOST=0.0.0.0:11434
 export OLLAMA_KEEP_ALIVE=-1
 export OLLAMA_NUM_PARALLEL=1
+export OLLAMA_DEBUG=1
 
 echo "Starting ollama serve with:"
 env | grep -E '^OLLAMA_' | sort
