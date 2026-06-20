@@ -501,20 +501,33 @@ DISPATCH = {
 # ---------------------------------------------------------------------------
 
 
-def ollama_chat(client: httpx.Client, host: str, model: str, messages: list, tools: list) -> dict:
-    """POST a chat-completion request via a caller-owned httpx.Client.
+def ollama_chat(
+    client: httpx.Client,
+    host: str,
+    model: str,
+    messages: list,
+    tools: list,
+    options: dict | None = None,
+) -> dict:
+    """POST a chat-completion request to Ollama's native /api/chat.
 
     The client is created once per session in `run_session` so the
     underlying TCP connection (and keep-alive pool) is reused across
     every turn instead of being torn down and re-handshaken each time.
+
+    `options` is the native per-request knob bag (num_ctx, num_gpu, seed,
+    temperature, ...). Omitted from the payload when empty so requests
+    stay minimal and Ollama applies its own defaults.
     """
-    url = f"{host.rstrip('/')}/v1/chat/completions"
+    url = f"{host.rstrip('/')}/api/chat"
     payload = {
         "model": model,
         "messages": messages,
         "tools": tools,
         "stream": False,
     }
+    if options:
+        payload["options"] = options
     r = client.post(url, json=payload)
     r.raise_for_status()
     return r.json()
@@ -560,8 +573,8 @@ def _as_str_list(value, *, field: str, step_id: str) -> list:
     )
 
 
-def load_recipe(path: Path, params: dict) -> tuple[str, str, list]:
-    """Returns (templated_prompt, recipe_title, steps).
+def load_recipe(path: Path, params: dict) -> tuple[str, str, list, dict]:
+    """Returns (templated_prompt, recipe_title, steps, ollama_options).
 
     Mutates `params` to apply the recipe's declared parameter defaults for any
     key not explicitly passed — so a recipe author marking a parameter as
@@ -570,6 +583,9 @@ def load_recipe(path: Path, params: dict) -> tuple[str, str, list]:
     `steps` is the recipe's step graph (see `step_aware_continue_prompt`).
     Each step's `nudge` is templated up-front so the session loop doesn't
     need to thread params through.
+
+    `ollama_options` is the recipe's `options:` block (passed through to
+    /api/chat as per-request options). CLI flags override these.
     """
     data = yaml.safe_load(path.read_text())
     title = data.get("title", "Recipe")
@@ -597,7 +613,15 @@ def load_recipe(path: Path, params: dict) -> tuple[str, str, list]:
             }
         )
 
-    return template_recipe(raw_prompt, params), title, steps
+    raw_options = data.get("options")
+    if raw_options is not None and not isinstance(raw_options, dict):
+        raise TypeError(
+            f"recipe options: expected mapping (e.g. 'num_ctx: 65536'), got "
+            f"{type(raw_options).__name__}: {raw_options!r}"
+        )
+    ollama_options = dict(raw_options or {})
+
+    return template_recipe(raw_prompt, params), title, steps, ollama_options
 
 
 def _tool_result_succeeded(result: str) -> bool:
@@ -667,10 +691,14 @@ def _extract_branch(messages: list) -> str | None:
         for tc in m.get("tool_calls") or []:
             if tc["function"]["name"] != "github__create_branch":
                 continue
+            raw = tc["function"]["arguments"]
+            # Native /api/chat returns arguments as a dict; OpenAI-compat as a
+            # JSON string. Mirror the dispatch loop's fallback so salvage's
+            # branch-recovery path works against either shape.
             try:
-                args = json.loads(tc["function"]["arguments"])
-            except json.JSONDecodeError:
-                continue
+                args = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                args = raw if isinstance(raw, dict) else {}
             if args.get("branch"):
                 return args["branch"]
     return None
@@ -764,11 +792,16 @@ def run_session(
     params: dict,
     max_turns: int = 60,
     salvage_enabled: bool = True,
+    cli_options: dict | None = None,
+    turn_timeout: float = 600.0,
 ) -> int:
-    recipe_prompt, recipe_title, recipe_steps = load_recipe(recipe_path, params)
+    recipe_prompt, recipe_title, recipe_steps, recipe_options = load_recipe(recipe_path, params)
     # load_recipe filled in YAML-declared defaults; now safe to template the
     # system prompt, which also references {{ base_branch }}.
     system_prompt = template_recipe(SYSTEM_PROMPT_PATH.read_text(), params)
+
+    # CLI options override recipe options (per-run knob trumps recipe default).
+    options = {**recipe_options, **(cli_options or {})}
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -781,6 +814,8 @@ def run_session(
     print(f"Recipe:         {recipe_path}  ({recipe_title})")
     print(f"Model:          {model}")
     print(f"Params:         {params}")
+    print(f"Options:        {options or '(defaults)'}")
+    print(f"Turn timeout:   {turn_timeout:g}s")
     print(f"Tools:          {len(TOOL_SCHEMAS)} declared")
     print()
     print("=== Session start ===")
@@ -790,10 +825,22 @@ def run_session(
     # One httpx.Client for the whole session — TCP+TLS handshake to the
     # Ollama host happens once, then the connection pool keeps the socket
     # warm across every turn (vs. a per-call handshake under the old shape).
-    with httpx.Client(timeout=600.0) as client:
+    # turn_timeout caps a single chat call — at heavy-offload throughput
+    # (1-2 t/s on a 70B with partial GPU), a 600s cap chokes responses past
+    # ~1000 tokens; bump it for big models via --turn-timeout.
+    with httpx.Client(timeout=turn_timeout) as client:
         for turn in range(1, max_turns + 1):
-            resp = ollama_chat(client, host, model, messages, TOOL_SCHEMAS)
-            msg = resp["choices"][0]["message"]
+            resp = ollama_chat(client, host, model, messages, TOOL_SCHEMAS, options)
+            msg = resp["message"]
+
+            # Native /api/chat omits `id` on tool calls. Synthesize one IN PLACE
+            # on the assistant message before we append it, so the whole pipeline
+            # (this loop's tool_call_id below, _extract_issue_title's correlation
+            # walk, any future consumer) sees a coherent assistant↔tool linkage.
+            for i, tc in enumerate(msg.get("tool_calls") or []):
+                if "id" not in tc:
+                    tc["id"] = f"call_{turn}_{i}"
+
             messages.append(msg)
 
             tool_calls = msg.get("tool_calls") or []
@@ -868,6 +915,26 @@ def run_session(
 # ---------------------------------------------------------------------------
 
 
+def _coerce_option_value(raw: str):
+    """Best-effort coercion for --ollama-option VALUE strings.
+
+    Tries bool → int → float → str so callers can write `use_mmap=true`,
+    `num_gpu=30`, `temperature=0.7` and get the right JSON type on the wire.
+    """
+    lower = raw.lower()
+    if lower in ("true", "false"):
+        return lower == "true"
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    return raw
+
+
 def resolve_base_branch(target_repo: str) -> str | None:
     """Mirror the wrapper's default_branch resolution."""
     rc, out, _ = _gh(["api", f"repos/{target_repo}", "--jq", ".default_branch"])
@@ -889,6 +956,28 @@ def main() -> int:
         action="store_true",
         help="Disable the mechanical PR-from-branch fallback when the model exits without "
         "calling create_pull_request.",
+    )
+    parser.add_argument(
+        "--num-ctx",
+        type=int,
+        default=None,
+        help="Per-request context window size (folds into Ollama options.num_ctx).",
+    )
+    parser.add_argument(
+        "--ollama-option",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Generic per-request Ollama option (e.g. num_gpu=30, seed=42, temperature=0.7). "
+        "Repeatable. Numeric and boolean values are coerced; everything else stays a string.",
+    )
+    parser.add_argument(
+        "--turn-timeout",
+        type=float,
+        default=600.0,
+        help="Seconds to wait on a single chat call before httpx raises ReadTimeout. "
+        "Default 600s is fine for ~30 t/s qwen-class models; for 70B-class with heavy "
+        "CPU offload (~1-2 t/s), bump to 3600 or higher.",
     )
     args = parser.parse_args()
 
@@ -917,6 +1006,16 @@ def main() -> int:
             params["base_branch"] = "main"
             print("(could not resolve default_branch; defaulting base_branch=main)")
 
+    cli_options: dict = {}
+    if args.num_ctx is not None:
+        cli_options["num_ctx"] = args.num_ctx
+    for opt in args.ollama_option:
+        if "=" not in opt:
+            print(f"Bad --ollama-option format: {opt} (expected KEY=VALUE)", file=sys.stderr)
+            return 2
+        k, v = opt.split("=", 1)
+        cli_options[k] = _coerce_option_value(v)
+
     return run_session(
         host=args.ollama_host,
         model=args.model,
@@ -924,6 +1023,8 @@ def main() -> int:
         params=params,
         max_turns=args.max_turns,
         salvage_enabled=not args.no_salvage,
+        cli_options=cli_options,
+        turn_timeout=args.turn_timeout,
     )
 
 

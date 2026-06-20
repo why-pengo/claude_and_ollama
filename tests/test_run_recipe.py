@@ -14,6 +14,7 @@ from run_recipe import (
     GENERIC_CONTINUE_PROMPT,
     TOOL_RESULT_SIZE_CAP,
     _cap,
+    _coerce_option_value,
     _extract_branch,
     _extract_issue_title,
     _tool_result_succeeded,
@@ -226,6 +227,7 @@ class TestStepAwareContinuePrompt:
 
 # ---------------------------------------------------------------------------
 # ollama_chat — POSTs through a caller-owned httpx.Client (#59)
+#                to Ollama's native /api/chat endpoint (#78)
 # ---------------------------------------------------------------------------
 
 
@@ -233,8 +235,8 @@ class TestOllamaChat:
     def test_uses_caller_provided_client_and_builds_url_payload(self):
         # Regression guard for #59: ollama_chat must accept and use the
         # client the caller passes in (so run_session can reuse a single
-        # client + connection pool across every turn), and it must build
-        # the standard OpenAI-compat URL + payload shape.
+        # client + connection pool across every turn). Also pins the #78
+        # native endpoint + envelope contract.
         seen: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -244,7 +246,7 @@ class TestOllamaChat:
             seen["payload"] = _json.loads(request.content)
             return httpx.Response(
                 200,
-                json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+                json={"message": {"role": "assistant", "content": "ok"}, "done_reason": "stop"},
             )
 
         with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -256,26 +258,28 @@ class TestOllamaChat:
                 [{"type": "function", "function": {"name": "noop"}}],
             )
 
-        assert seen["url"] == "http://bazzite.local:11434/v1/chat/completions"
+        assert seen["url"] == "http://bazzite.local:11434/api/chat"
         assert seen["payload"]["model"] == "qwen3.6:latest"
         assert seen["payload"]["stream"] is False
         assert seen["payload"]["messages"] == [{"role": "user", "content": "hi"}]
         assert seen["payload"]["tools"][0]["function"]["name"] == "noop"
-        assert resp["choices"][0]["message"]["content"] == "ok"
+        # No options passed → key must be absent from the wire payload.
+        assert "options" not in seen["payload"]
+        assert resp["message"]["content"] == "ok"
 
     def test_strips_trailing_slash_from_host(self):
-        # Defensive: host=".../" should not produce "...//v1/..." with a
+        # Defensive: host=".../" should not produce "...//api/..." with a
         # double slash.
         seen: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
             seen["url"] = str(request.url)
-            return httpx.Response(200, json={"choices": [{"message": {"content": "x"}}]})
+            return httpx.Response(200, json={"message": {"content": "x"}})
 
         with httpx.Client(transport=httpx.MockTransport(handler)) as client:
             ollama_chat(client, "http://example/", "m", [], [])
 
-        assert seen["url"] == "http://example/v1/chat/completions"
+        assert seen["url"] == "http://example/api/chat"
 
     def test_raises_for_status_on_http_error(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -284,6 +288,74 @@ class TestOllamaChat:
         with httpx.Client(transport=httpx.MockTransport(handler)) as client:
             with pytest.raises(httpx.HTTPStatusError):
                 ollama_chat(client, "http://example", "m", [], [])
+
+    def test_options_sent_when_non_empty(self):
+        # Per-request options (num_ctx, num_gpu, seed, ...) must reach the
+        # wire payload under an "options" key — this is the whole point of
+        # the /api/chat swap (#78).
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            seen["payload"] = _json.loads(request.content)
+            return httpx.Response(200, json={"message": {"content": "ok"}})
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            ollama_chat(
+                client,
+                "http://example",
+                "m",
+                [],
+                [],
+                options={"num_ctx": 65536, "num_gpu": 30, "seed": 42},
+            )
+
+        assert seen["payload"]["options"] == {"num_ctx": 65536, "num_gpu": 30, "seed": 42}
+
+    def test_options_omitted_when_empty(self):
+        # Explicit empty dict should behave the same as None: no options key
+        # on the wire (lets Ollama apply its own defaults; keeps payloads lean).
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            seen["payload"] = _json.loads(request.content)
+            return httpx.Response(200, json={"message": {"content": "ok"}})
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            ollama_chat(client, "http://example", "m", [], [], options={})
+
+        assert "options" not in seen["payload"]
+
+
+# ---------------------------------------------------------------------------
+# _coerce_option_value — --ollama-option KEY=VALUE coercion (#78)
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceOptionValue:
+    def test_coerces_int(self):
+        assert _coerce_option_value("30") == 30
+        assert isinstance(_coerce_option_value("30"), int)
+
+    def test_coerces_float(self):
+        assert _coerce_option_value("0.7") == 0.7
+        assert isinstance(_coerce_option_value("0.7"), float)
+
+    def test_coerces_bool(self):
+        assert _coerce_option_value("true") is True
+        assert _coerce_option_value("True") is True
+        assert _coerce_option_value("false") is False
+
+    def test_keeps_arbitrary_string(self):
+        assert _coerce_option_value("stop_here") == "stop_here"
+
+    def test_int_takes_precedence_over_float(self):
+        # "42" is parseable as both int and float; we want the int.
+        assert _coerce_option_value("42") == 42
+        assert isinstance(_coerce_option_value("42"), int)
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +404,7 @@ class TestLoadRecipe:
                   Issue #{{ issue_number }} in {{ repo }} on {{ base_branch }}.
                 """))
         params = {"issue_number": "51"}
-        prompt, title, _steps = load_recipe(recipe, params)
+        prompt, title, _steps, _opts = load_recipe(recipe, params)
         assert title == "Execute GitHub Issue"
         assert "Issue #51 in why-pengo/claude_and_ollama on main." in prompt
         # Mutated in place so the caller can use the resolved values too
@@ -351,7 +423,7 @@ class TestLoadRecipe:
                   {{ repo }}
                 """))
         params = {"repo": "override/repo"}
-        prompt, _, _ = load_recipe(recipe, params)
+        prompt, _, _, _ = load_recipe(recipe, params)
         assert "override/repo" in prompt
 
     def test_returns_empty_steps_when_block_absent(self, tmp_path):
@@ -361,7 +433,7 @@ class TestLoadRecipe:
                 prompt: |
                   hi
                 """))
-        _, _, steps = load_recipe(recipe, {})
+        _, _, steps, _ = load_recipe(recipe, {})
         assert steps == []
 
     def test_parses_steps_and_templates_nudges(self, tmp_path):
@@ -377,7 +449,7 @@ class TestLoadRecipe:
                 prompt: |
                   hi
                 """))
-        _, _, steps = load_recipe(recipe, {"issue_number": "42"})
+        _, _, steps, _ = load_recipe(recipe, {"issue_number": "42"})
         assert steps == [
             {
                 "id": "write",
@@ -402,7 +474,7 @@ class TestLoadRecipe:
                 prompt: |
                   hi
                 """))
-        _, _, steps = load_recipe(recipe, {})
+        _, _, steps, _ = load_recipe(recipe, {})
         assert steps[0]["advances_on"] == ["github__issue_read"]
         assert steps[0]["requires_prior"] == ["branch"]
 
@@ -419,6 +491,45 @@ class TestLoadRecipe:
                 """))
         with pytest.raises(TypeError, match="advances_on"):
             load_recipe(recipe, {})
+
+    def test_parses_options_block(self, tmp_path):
+        # Recipe-level Ollama options carry through as the 4th tuple element
+        # so run_session can merge them with CLI overrides.
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                options:
+                  num_ctx: 65536
+                  num_gpu: 30
+                prompt: |
+                  hi
+                """))
+        _, _, _, opts = load_recipe(recipe, {})
+        assert opts == {"num_ctx": 65536, "num_gpu": 30}
+
+    def test_rejects_non_mapping_options(self, tmp_path):
+        # A scalar under `options:` is almost certainly an authoring typo
+        # (`options: 65536` instead of `options:\n  num_ctx: 65536`).
+        # Surface it loudly, not as a downstream dict()-coercion error.
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                options: 65536
+                prompt: |
+                  hi
+                """))
+        with pytest.raises(TypeError, match="recipe options"):
+            load_recipe(recipe, {})
+
+    def test_returns_empty_options_when_block_absent(self, tmp_path):
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                prompt: |
+                  hi
+                """))
+        _, _, _, opts = load_recipe(recipe, {})
+        assert opts == {}
 
     def test_rejects_unexpected_advances_on_type(self, tmp_path):
         # A dict (or any non-str, non-list, non-None) at the field level is
@@ -476,6 +587,29 @@ class TestExtractBranch:
             },
         ]
         assert _extract_branch(messages) is None
+
+    def test_handles_dict_arguments_from_native_api_chat(self):
+        # Regression: native /api/chat returns arguments as a dict (not a JSON
+        # string). _extract_branch used to json.loads() it unconditionally and
+        # crash the salvage path with TypeError. eval-24 surfaced this.
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "b1",
+                        "function": {
+                            "name": "github__create_branch",
+                            "arguments": {
+                                "branch": "runner/issue-51-foo",
+                                "from_branch": "develop",
+                            },
+                        },
+                    }
+                ],
+            },
+        ]
+        assert _extract_branch(messages) == "runner/issue-51-foo"
 
 
 class TestExtractIssueTitle:
