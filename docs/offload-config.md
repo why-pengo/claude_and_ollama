@@ -2,6 +2,8 @@
 
 Reference for what we can and can't control about model placement (GPU vs CPU/RAM) on `bazzite` when running Goose against Ollama. Closes Subtask 2 of #50.
 
+> **Status: parked (2026-06-20).** Partial-GPU offload is no longer pursued as a production lane for the runner. Decision driven by the eval-25c → eval-26 variance review: offload raised the *ceiling* (eval-25c was the first end-to-end recipe completion) but hurt the *floor* — the throughput-vs-context curve below halves `tg` past ~70K context, and the same model + options collapsed in eval-26 at the depth where the curve goes ugly. The harness goal is a reliable two-agent loop; reliability comes from the floor, so model selection now biases toward fully-GPU-resident candidates (qwen3.6 + salvage gives 100% review-able PRs). This file is retained as the curve-and-knob reference; treat it as diagnostic, not a tuning roadmap. Direction going forward is all API-driven via `/api/chat` per-request options (#78); Modelfile-based pre-config is being retired alongside this decision.
+>
 > **Superseded in part by #78.** The runner no longer uses Goose, and `ollama_chat()` now POSTs to native `/api/chat`, so per-request `options` (`num_ctx`, `num_gpu`, `seed`, `temperature`, ...) are first-class. Use the CLI flags `--num-ctx N` and `--ollama-option key=value` (or a recipe `options:` block) for any *Ollama-options* knob — i.e. the rows in the table marked "Ollama" or "Goose"; the **llama.cpp-only rows (`--n-cpu-moe`, `--no-kv-offload`)** are still unreachable without leaving Ollama. The Goose-side and Modelfile sections below remain accurate as historical context for evals 14–22 and as a per-knob reference, but their *Modelfile is the only way to set this* framing no longer applies to Ollama options.
 
 ## TL;DR
@@ -162,6 +164,24 @@ Empirical numbers from running llama3.3:70b-instruct-q3_K_M at `num_gpu=30 num_c
 2. **10 GiB VRAM headroom unused.** The `num_gpu=30` choice from the deleted Modelfile was conservative. `--ollama-option num_gpu=40` (50% of layers) or higher should fit comfortably, pushing more work to GPU and raising throughput.
 3. **Substantially larger models reachable.** With ~125 GiB total memory (RAM + VRAM), the practical ceiling at q3 + q8_0 KV quant extends to ~110B-class. Mistral Large 2 (123B), qwen3-coder-235B, even Llama 3.1 405B at aggressive quant — all theoretically loadable, with throughput tradeoffs.
 4. The "70B is the ceiling on this hardware" assumption from the #50 era is **outdated**. Worth revisiting if #47's bake-off motivates exploring 100B+ candidates.
+
+### Throughput vs context length (eval-26 observation)
+
+The `tg` number from the bazzite Ollama server log is **not constant within a run** — it drops as the recipe progresses and message history grows. Measured during eval-26 (same model + options as eval-25c):
+
+| Context size during the turn | Observed `tg` |
+|---|---|
+| ~few thousand tokens (early turns) | 1.8 t/s (peak) |
+| ~10–30K tokens (mid recipe) | 1.3 t/s |
+| ~50–70K tokens (late turns) | 0.8 t/s |
+
+Why: with classic full attention, *per-token* attention cost grows roughly linearly with context length, and the *total* cost over a long generation is quadratic. Early turns are weight-bandwidth-bound (the 1.8 t/s ceiling on this hardware for this model). As context grows past ~30K tokens, attention math starts adding meaningful latency on top of the constant per-token weights cost. By 70K+ context, attention can be adding 50%+ per-token time.
+
+Implications:
+1. **A single `tg` number isn't a meaningful per-model benchmark.** Reporting "llama3.3:70b at num_gpu=30 = 1.29 t/s" hides a 2x spread. Report a curve (or report at a specified context size).
+2. **Long-context workloads pay a real attention tax** — even with q8_0 KV quant. KV quant reduces *memory* per token; it doesn't reduce attention *FLOPs*.
+3. **Different models will scale differently** in this curve. A model with sliding-window or grouped attention (e.g. Llama 3+, qwen3) stays faster at long context than one with classic full attention. Worth measuring per-candidate during #47's bake-off.
+4. **Methodology for the bake-off**: each candidate should be measured at matched context sizes, not "whatever it happened to be at when measured." Or measure end-to-end recipe wall-clock, which integrates the curve naturally.
 
 ### What changed since #50/#78
 
