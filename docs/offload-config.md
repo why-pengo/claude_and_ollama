@@ -2,6 +2,8 @@
 
 Reference for what we can and can't control about model placement (GPU vs CPU/RAM) on `bazzite` when running Goose against Ollama. Closes Subtask 2 of #50.
 
+> **Superseded in part by #78.** The runner no longer uses Goose, and `ollama_chat()` now POSTs to native `/api/chat`, so per-request `options` (`num_ctx`, `num_gpu`, `seed`, `temperature`, ...) are first-class. Use the CLI flags `--num-ctx N` and `--ollama-option key=value` (or a recipe `options:` block) to set anything from the table below — Modelfiles are no longer the only lever. The "Goose-side" and "Modelfile" sections below remain accurate as historical context for evals 14–22 and as a map of what every option actually does, but the *only-way-to-set-them* framing no longer applies.
+
 ## TL;DR
 
 | Layer | Knob | How to set | Available? |
