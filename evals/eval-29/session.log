@@ -1,0 +1,34 @@
+(resolved base_branch=develop from why-pengo/health_track)
+Runner:         direct-ollama POC
+Repo:           /Volumes/Crucial_X9/workspace/claude_and_ollama
+Ollama:         http://bazzite.local:11434
+Recipe:         recipes/execute-issue.yaml  (Execute GitHub Issue)
+Model:          qwen2.5-coder:32b
+Params:         {'issue_number': '51', 'repo': 'why-pengo/health_track', 'base_branch': 'develop'}
+Options:        {'num_ctx': 98304}
+Turn timeout:   600s
+Tools:          7 declared
+
+=== Session start ===
+
+  [model emitted prose — 119 chars; no tool call]
+  {"name": "github__get_file_contents", "arguments": {"owner": "why-pengo", "repo": "health_track", "path": "AGENTS.md"}}
+
+  [runner: nudging — "You have not read the issue yet. Step 1 of the recipe is mandatory:
+your NEXT TO..."]
+
+
+  [model emitted prose — 111 chars; no tool call]
+  {"name": "github__issue_read", "arguments": {"owner": "why-pengo", "repo": "health_track", "issue_number": 51}}
+
+  [runner: nudging — "You have not read the issue yet. Step 1 of the recipe is mandatory:
+your NEXT TO..."]
+
+
+  [model emitted prose — 111 chars; no tool call]
+  {"name": "github__issue_read", "arguments": {"owner": "why-pengo", "repo": "health_track", "issue_number": 51}}
+
+
+=== 3 consecutive no-tool-call turns; giving up (turn 3) ===
+
+=== Salvage skipped: missing branch / issue-title / repo / issue-number ===
