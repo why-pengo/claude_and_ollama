@@ -142,6 +142,33 @@ The original #50 plan assumed offload was a configurable axis we could sweep. Th
 
 If 70B-class doesn't move the needle, that's the trigger to consider `llama-server` as the runner — and a much bigger scope decision than #50 originally implied.
 
+## Bazzite capacity baseline (post-#78, measured eval-25b)
+
+Empirical numbers from running llama3.3:70b-instruct-q3_K_M at `num_gpu=30 num_ctx=131072` with `OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0` on the bazzite Ollama serve:
+
+| Resource | Reading | Notes |
+|---|---|---|
+| System RAM | 93 GiB total | `free -h` |
+| RAM used (anon) | 26 GiB | KV cache CPU portion (~12.6 GB) + activations + process + other system |
+| RAM buff/cache | 60 GiB | mmap'd model weights (full 34 GB cached, both CPU- and GPU-bound layers) + general file cache |
+| RAM available | 67 GiB | Headroom for new allocations |
+| GPU VRAM | 32 GiB total | RTX 5090 (or equiv) |
+| GPU VRAM used | 22 GiB | Weights (~13 GB at 30/80 layers) + KV cache GPU portion (~7 GB at q8_0) + overhead |
+| Throughput | 1.29 t/s | Memory-bandwidth bound (CPU side reads ~21 GB weights per token) |
+
+### Implications
+
+1. **Not memory-constrained anywhere.** Bottleneck is DRAM bandwidth (CPU side), not capacity. Throwing more CPU cores at it doesn't help — cores already idle waiting for memory.
+2. **10 GiB VRAM headroom unused.** The `num_gpu=30` choice from the deleted Modelfile was conservative. `--ollama-option num_gpu=40` (50% of layers) or higher should fit comfortably, pushing more work to GPU and raising throughput.
+3. **Substantially larger models reachable.** With ~125 GiB total memory (RAM + VRAM), the practical ceiling at q3 + q8_0 KV quant extends to ~110B-class. Mistral Large 2 (123B), qwen3-coder-235B, even Llama 3.1 405B at aggressive quant — all theoretically loadable, with throughput tradeoffs.
+4. The "70B is the ceiling on this hardware" assumption from the #50 era is **outdated**. Worth revisiting if #47's bake-off motivates exploring 100B+ candidates.
+
+### What changed since #50/#78
+
+- `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0` is now standard on bazzite (set in `start-with-kv-quant.sh`). Halved KV memory unlocked 131K context where the old Modelfile capped at 65K.
+- Per-request `options` via #78's `/api/chat` swap means `num_gpu`, `num_ctx`, etc. are now per-eval knobs — no per-candidate Modelfile builds.
+- Combined effect: the bake-off candidate space is now an `(model, num_gpu, num_ctx)` cube driven by CLI flags, not a per-model Modelfile zoo.
+
 ## How to verify a Modelfile applied correctly
 
 After `ollama create`, before running a full eval:
