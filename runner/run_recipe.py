@@ -21,10 +21,12 @@ Env required:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 import httpx
@@ -651,6 +653,42 @@ GENERIC_CONTINUE_PROMPT = (
 )
 
 
+def turn_signature(msg: dict) -> tuple:
+    """Hashable signature of one assistant turn, for loop detection.
+
+    Tool-call turns hash on a tuple of (fn_name, canonical-JSON-args) per
+    call so identical calls compare equal regardless of key ordering.
+    Prose-only turns hash on a sha256 of the content — sha256 because the
+    raw prose can be multi-KB and the signature ends up in a Counter.
+
+    eval-26 produced a sampling-collapse loop that alternated identical
+    tool calls with identical prose blobs (~12x repeats). The existing
+    empty_turn_count guard at run_session() only fires on consecutive
+    no-tool-call turns, so the alternation kept resetting it. This
+    signature is what the loop-detect Counter keys on instead.
+    """
+    tool_calls = msg.get("tool_calls") or []
+    if tool_calls:
+        parts = []
+        for tc in tool_calls:
+            fn = tc.get("function") or {}
+            name = fn.get("name") or ""
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            try:
+                canonical = json.dumps(args, sort_keys=True, default=str)
+            except TypeError:
+                canonical = repr(args)
+            parts.append(("tool", name, canonical))
+        return tuple(parts)
+    content = msg.get("content") or ""
+    return (("prose", hashlib.sha256(content.encode("utf-8")).hexdigest()),)
+
+
 def step_aware_continue_prompt(succeeded: set[str], steps: list) -> str:
     """
     On a no-tool-call turn, return the most specific next-step instruction
@@ -794,6 +832,7 @@ def run_session(
     salvage_enabled: bool = True,
     cli_options: dict | None = None,
     turn_timeout: float = 600.0,
+    loop_detect_threshold: int | None = 4,
 ) -> int:
     recipe_prompt, recipe_title, recipe_steps, recipe_options = load_recipe(recipe_path, params)
     # load_recipe filled in YAML-declared defaults; now safe to template the
@@ -822,6 +861,12 @@ def run_session(
 
     succeeded: set[str] = set()
     empty_turn_count = 0
+    # Counter of turn signatures since the last successful new tool name
+    # reached `succeeded`. eval-26 showed sampling-collapse loops that
+    # alternate identical tool calls with identical prose blobs, so the
+    # consecutive-empty-turn guard below doesn't catch them. When any
+    # single signature's count crosses loop_detect_threshold, we abort.
+    recent_signatures: Counter[tuple] = Counter()
     # One httpx.Client for the whole session — TCP+TLS handshake to the
     # Ollama host happens once, then the connection pool keeps the socket
     # warm across every turn (vs. a per-call handshake under the old shape).
@@ -845,6 +890,8 @@ def run_session(
 
             tool_calls = msg.get("tool_calls") or []
             content = msg.get("content") or ""
+            prev_succeeded_count = len(succeeded)
+            sig = turn_signature(msg)
 
             if tool_calls:
                 empty_turn_count = 0
@@ -881,28 +928,47 @@ def run_session(
                 if recipe_done(succeeded):
                     print(f"\n=== Recipe complete: PR + issue comment both fired (turn {turn}) ===")
                     return 0
-                continue
+            else:
+                # No tool call this turn. THIS IS THE CRUX of the POC.
+                # Goose would exit here; we prompt the model to continue.
+                if content:
+                    print(f"\n  [model emitted prose — {len(content)} chars; no tool call]")
+                    print(f"  {content[:300]}{'...' if len(content) > 300 else ''}\n")
 
-            # No tool call this turn. THIS IS THE CRUX of the POC.
-            # Goose would exit here; we prompt the model to continue.
-            if content:
-                print(f"\n  [model emitted prose — {len(content)} chars; no tool call]")
-                print(f"  {content[:300]}{'...' if len(content) > 300 else ''}\n")
+                empty_turn_count += 1
+                if empty_turn_count >= 3:
+                    print(f"\n=== 3 consecutive no-tool-call turns; giving up (turn {turn}) ===")
+                    if salvage_enabled:
+                        attempt_salvage(messages, params, succeeded)
+                    return 2
 
-            empty_turn_count += 1
-            if empty_turn_count >= 3:
-                print(f"\n=== 3 consecutive no-tool-call turns; giving up (turn {turn}) ===")
-                if salvage_enabled:
-                    attempt_salvage(messages, params, succeeded)
-                return 2
+                if recipe_done(succeeded):
+                    print(f"\n=== Recipe complete (turn {turn}) ===")
+                    return 0
 
-            if recipe_done(succeeded):
-                print(f"\n=== Recipe complete (turn {turn}) ===")
-                return 0
+                next_prompt = step_aware_continue_prompt(succeeded, recipe_steps)
+                print(f'  [runner: nudging — "{next_prompt[:80]}..."]\n')
+                messages.append({"role": "user", "content": next_prompt})
 
-            next_prompt = step_aware_continue_prompt(succeeded, recipe_steps)
-            print(f'  [runner: nudging — "{next_prompt[:80]}..."]\n')
-            messages.append({"role": "user", "content": next_prompt})
+            # Loop detection — runs for both branches. Any new tool name
+            # reaching `succeeded` this turn is real progress, so the
+            # counter resets. Otherwise track this turn's signature; if
+            # the same one has now appeared loop_detect_threshold times
+            # since last progress, abort instead of burning more turns.
+            if loop_detect_threshold is not None:
+                if len(succeeded) > prev_succeeded_count:
+                    recent_signatures.clear()
+                else:
+                    recent_signatures[sig] += 1
+                    if recent_signatures[sig] >= loop_detect_threshold:
+                        print(
+                            f"\n=== Loop detected: turn signature repeated "
+                            f"{recent_signatures[sig]}x without progress; aborting "
+                            f"(turn {turn}) ==="
+                        )
+                        if salvage_enabled:
+                            attempt_salvage(messages, params, succeeded)
+                        return 4
 
     print(f"\n=== Hit max_turns ({max_turns}); giving up ===")
     if salvage_enabled:
@@ -979,6 +1045,24 @@ def main() -> int:
         "Default 600s is fine for ~30 t/s qwen-class models; for 70B-class with heavy "
         "CPU offload (~1-2 t/s), bump to 3600 or higher.",
     )
+    parser.add_argument(
+        "--loop-detect-threshold",
+        type=int,
+        default=4,
+        help="Abort when the same turn signature (tool call + args, or prose-content "
+        "hash) has appeared this many times since the last successful new tool name "
+        "reached `succeeded`. Default 4 catches the eval-26 sampling-collapse pattern "
+        "(alternating identical tool calls / prose blobs) without tripping on a few "
+        "legitimate repeat reads. Must be a positive integer; use --no-loop-detect "
+        "to disable.",
+    )
+    parser.add_argument(
+        "--no-loop-detect",
+        action="store_true",
+        help="Disable the repeated-signature loop-detection guard. Use when "
+        "investigating model behaviour that legitimately involves many identical "
+        "repeated calls.",
+    )
     args = parser.parse_args()
 
     if not args.recipe.exists():
@@ -987,6 +1071,16 @@ def main() -> int:
 
     if not os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN"):
         print("GITHUB_PERSONAL_ACCESS_TOKEN not set", file=sys.stderr)
+        return 2
+
+    # 0 or negative would make the guard trip on every no-progress turn
+    # (Counter[sig] >= 0 is always true). The disable path is --no-loop-detect.
+    if args.loop_detect_threshold <= 0:
+        print(
+            f"--loop-detect-threshold must be a positive integer "
+            f"(got {args.loop_detect_threshold}); use --no-loop-detect to disable.",
+            file=sys.stderr,
+        )
         return 2
 
     params = {}
@@ -1025,6 +1119,7 @@ def main() -> int:
         salvage_enabled=not args.no_salvage,
         cli_options=cli_options,
         turn_timeout=args.turn_timeout,
+        loop_detect_threshold=None if args.no_loop_detect else args.loop_detect_threshold,
     )
 
 
