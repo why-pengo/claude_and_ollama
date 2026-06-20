@@ -172,10 +172,10 @@ The `tg` number from the bazzite Ollama server log is **not constant within a ru
 | Context size during the turn | Observed `tg` |
 |---|---|
 | ~few thousand tokens (early turns) | 1.8 t/s (peak) |
-| ~10s of thousands (mid recipe) | 1.3 t/s |
+| ~10–30K tokens (mid recipe) | 1.3 t/s |
 | ~50–70K tokens (late turns) | 0.8 t/s |
 
-Why: attention compute scales super-linearly with context length. Early turns are weight-bandwidth-bound (the 1.8 t/s ceiling on this hardware for this model). As context grows past ~30K tokens, attention math starts adding meaningful latency on top of the constant per-token weights cost. By 70K+ context, attention can be adding 50%+ per-token time.
+Why: with classic full attention, *per-token* attention cost grows roughly linearly with context length, and the *total* cost over a long generation is quadratic. Early turns are weight-bandwidth-bound (the 1.8 t/s ceiling on this hardware for this model). As context grows past ~30K tokens, attention math starts adding meaningful latency on top of the constant per-token weights cost. By 70K+ context, attention can be adding 50%+ per-token time.
 
 Implications:
 1. **A single `tg` number isn't a meaningful per-model benchmark.** Reporting "llama3.3:70b at num_gpu=30 = 1.29 t/s" hides a 2x spread. Report a curve (or report at a specified context size).
