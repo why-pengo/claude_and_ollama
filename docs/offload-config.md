@@ -163,6 +163,24 @@ Empirical numbers from running llama3.3:70b-instruct-q3_K_M at `num_gpu=30 num_c
 3. **Substantially larger models reachable.** With ~125 GiB total memory (RAM + VRAM), the practical ceiling at q3 + q8_0 KV quant extends to ~110B-class. Mistral Large 2 (123B), qwen3-coder-235B, even Llama 3.1 405B at aggressive quant — all theoretically loadable, with throughput tradeoffs.
 4. The "70B is the ceiling on this hardware" assumption from the #50 era is **outdated**. Worth revisiting if #47's bake-off motivates exploring 100B+ candidates.
 
+### Throughput vs context length (eval-26 observation)
+
+The `tg` number from the bazzite Ollama server log is **not constant within a run** — it drops as the recipe progresses and message history grows. Measured during eval-26 (same model + options as eval-25c):
+
+| Context size during the turn | Observed `tg` |
+|---|---|
+| ~few thousand tokens (early turns) | 1.8 t/s (peak) |
+| ~10s of thousands (mid recipe) | 1.3 t/s |
+| ~50–70K tokens (late turns) | 0.8 t/s |
+
+Why: attention compute scales super-linearly with context length. Early turns are weight-bandwidth-bound (the 1.8 t/s ceiling on this hardware for this model). As context grows past ~30K tokens, attention math starts adding meaningful latency on top of the constant per-token weights cost. By 70K+ context, attention can be adding 50%+ per-token time.
+
+Implications:
+1. **A single `tg` number isn't a meaningful per-model benchmark.** Reporting "llama3.3:70b at num_gpu=30 = 1.29 t/s" hides a 2x spread. Report a curve (or report at a specified context size).
+2. **Long-context workloads pay a real attention tax** — even with q8_0 KV quant. KV quant reduces *memory* per token; it doesn't reduce attention *FLOPs*.
+3. **Different models will scale differently** in this curve. A model with sliding-window or grouped attention (e.g. Llama 3+, qwen3) stays faster at long context than one with classic full attention. Worth measuring per-candidate during #47's bake-off.
+4. **Methodology for the bake-off**: each candidate should be measured at matched context sizes, not "whatever it happened to be at when measured." Or measure end-to-end recipe wall-clock, which integrates the curve naturally.
+
 ### What changed since #50/#78
 
 - `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0` is now standard on bazzite (set in `start-with-kv-quant.sh`). Halved KV memory unlocked 131K context where the old Modelfile capped at 65K.
