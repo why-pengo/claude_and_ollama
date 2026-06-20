@@ -613,7 +613,13 @@ def load_recipe(path: Path, params: dict) -> tuple[str, str, list, dict]:
             }
         )
 
-    ollama_options = dict(data.get("options") or {})
+    raw_options = data.get("options")
+    if raw_options is not None and not isinstance(raw_options, dict):
+        raise TypeError(
+            f"recipe options: expected mapping (e.g. 'num_ctx: 65536'), got "
+            f"{type(raw_options).__name__}: {raw_options!r}"
+        )
+    ollama_options = dict(raw_options or {})
 
     return template_recipe(raw_prompt, params), title, steps, ollama_options
 
@@ -817,6 +823,15 @@ def run_session(
         for turn in range(1, max_turns + 1):
             resp = ollama_chat(client, host, model, messages, TOOL_SCHEMAS, options)
             msg = resp["message"]
+
+            # Native /api/chat omits `id` on tool calls. Synthesize one IN PLACE
+            # on the assistant message before we append it, so the whole pipeline
+            # (this loop's tool_call_id below, _extract_issue_title's correlation
+            # walk, any future consumer) sees a coherent assistant↔tool linkage.
+            for i, tc in enumerate(msg.get("tool_calls") or []):
+                if "id" not in tc:
+                    tc["id"] = f"call_{turn}_{i}"
+
             messages.append(msg)
 
             tool_calls = msg.get("tool_calls") or []
@@ -824,7 +839,7 @@ def run_session(
 
             if tool_calls:
                 empty_turn_count = 0
-                for i, tc in enumerate(tool_calls):
+                for tc in tool_calls:
                     fn_name = tc["function"]["name"]
                     try:
                         fn_args = json.loads(tc["function"]["arguments"])
@@ -845,13 +860,10 @@ def run_session(
                             result = impl(fn_args if isinstance(fn_args, dict) else {})
                         except Exception as e:
                             result = f"ERROR running {fn_name}: {type(e).__name__}: {e}"
-                    # Native /api/chat doesn't return an id on tool calls; synthesize
-                    # one when missing so tool messages stay shape-stable for any
-                    # consumer that does care (and remain easy to correlate in logs).
                     messages.append(
                         {
                             "role": "tool",
-                            "tool_call_id": tc.get("id") or f"call_{turn}_{i}",
+                            "tool_call_id": tc["id"],
                             "content": result,
                         }
                     )

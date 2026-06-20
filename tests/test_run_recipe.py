@@ -507,6 +507,20 @@ class TestLoadRecipe:
         _, _, _, opts = load_recipe(recipe, {})
         assert opts == {"num_ctx": 65536, "num_gpu": 30}
 
+    def test_rejects_non_mapping_options(self, tmp_path):
+        # A scalar under `options:` is almost certainly an authoring typo
+        # (`options: 65536` instead of `options:\n  num_ctx: 65536`).
+        # Surface it loudly, not as a downstream dict()-coercion error.
+        recipe = tmp_path / "r.yaml"
+        recipe.write_text(textwrap.dedent("""\
+                title: r
+                options: 65536
+                prompt: |
+                  hi
+                """))
+        with pytest.raises(TypeError, match="recipe options"):
+            load_recipe(recipe, {})
+
     def test_returns_empty_options_when_block_absent(self, tmp_path):
         recipe = tmp_path / "r.yaml"
         recipe.write_text(textwrap.dedent("""\
