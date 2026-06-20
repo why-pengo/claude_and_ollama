@@ -793,6 +793,7 @@ def run_session(
     max_turns: int = 60,
     salvage_enabled: bool = True,
     cli_options: dict | None = None,
+    turn_timeout: float = 600.0,
 ) -> int:
     recipe_prompt, recipe_title, recipe_steps, recipe_options = load_recipe(recipe_path, params)
     # load_recipe filled in YAML-declared defaults; now safe to template the
@@ -814,6 +815,7 @@ def run_session(
     print(f"Model:          {model}")
     print(f"Params:         {params}")
     print(f"Options:        {options or '(defaults)'}")
+    print(f"Turn timeout:   {turn_timeout:g}s")
     print(f"Tools:          {len(TOOL_SCHEMAS)} declared")
     print()
     print("=== Session start ===")
@@ -823,7 +825,10 @@ def run_session(
     # One httpx.Client for the whole session — TCP+TLS handshake to the
     # Ollama host happens once, then the connection pool keeps the socket
     # warm across every turn (vs. a per-call handshake under the old shape).
-    with httpx.Client(timeout=600.0) as client:
+    # turn_timeout caps a single chat call — at heavy-offload throughput
+    # (1-2 t/s on a 70B with partial GPU), a 600s cap chokes responses past
+    # ~1000 tokens; bump it for big models via --turn-timeout.
+    with httpx.Client(timeout=turn_timeout) as client:
         for turn in range(1, max_turns + 1):
             resp = ollama_chat(client, host, model, messages, TOOL_SCHEMAS, options)
             msg = resp["message"]
@@ -966,6 +971,14 @@ def main() -> int:
         help="Generic per-request Ollama option (e.g. num_gpu=30, seed=42, temperature=0.7). "
         "Repeatable. Numeric and boolean values are coerced; everything else stays a string.",
     )
+    parser.add_argument(
+        "--turn-timeout",
+        type=float,
+        default=600.0,
+        help="Seconds to wait on a single chat call before httpx raises ReadTimeout. "
+        "Default 600s is fine for ~30 t/s qwen-class models; for 70B-class with heavy "
+        "CPU offload (~1-2 t/s), bump to 3600 or higher.",
+    )
     args = parser.parse_args()
 
     if not args.recipe.exists():
@@ -1011,6 +1024,7 @@ def main() -> int:
         max_turns=args.max_turns,
         salvage_enabled=not args.no_salvage,
         cli_options=cli_options,
+        turn_timeout=args.turn_timeout,
     )
 
 
