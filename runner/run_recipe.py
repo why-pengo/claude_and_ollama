@@ -1053,7 +1053,8 @@ def main() -> int:
         "hash) has appeared this many times since the last successful new tool name "
         "reached `succeeded`. Default 4 catches the eval-26 sampling-collapse pattern "
         "(alternating identical tool calls / prose blobs) without tripping on a few "
-        "legitimate repeat reads. Set 0 with --no-loop-detect to disable.",
+        "legitimate repeat reads. Must be a positive integer; use --no-loop-detect "
+        "to disable.",
     )
     parser.add_argument(
         "--no-loop-detect",
@@ -1070,6 +1071,16 @@ def main() -> int:
 
     if not os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN"):
         print("GITHUB_PERSONAL_ACCESS_TOKEN not set", file=sys.stderr)
+        return 2
+
+    # 0 or negative would make the guard trip on every no-progress turn
+    # (Counter[sig] >= 0 is always true). The disable path is --no-loop-detect.
+    if args.loop_detect_threshold <= 0:
+        print(
+            f"--loop-detect-threshold must be a positive integer "
+            f"(got {args.loop_detect_threshold}); use --no-loop-detect to disable.",
+            file=sys.stderr,
+        )
         return 2
 
     params = {}

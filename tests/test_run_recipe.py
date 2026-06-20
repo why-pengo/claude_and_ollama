@@ -833,7 +833,11 @@ class TestRunSessionLoopDetect:
         x = _tool_call_msg("github__get_file_contents", {"path": "x"})
         prose = _prose_msg('{"name": "create_or_update_file", "args": {...}}')
         scripted = [x, prose, x, prose, x, prose, x, prose]
-        # X hits count=4 on the 7th turn (turn indices 1,3,5,7).
+        # Trace: turn 1 X is first-seen → progress, counter clears. From there:
+        # turn 2 prose→count[prose]=1, turn 3 X→count[X]=1, turn 4 prose=2,
+        # turn 5 X=2, turn 6 prose=3, turn 7 X=3, turn 8 prose=4 → TRIP.
+        # Prose hits threshold first, on turn 8, because the X-first-sighting
+        # progress on turn 1 gave X a one-turn head start that it never gets back.
         rc = self._runs(monkeypatch, tmp_path, scripted)
         assert rc == 4
 
