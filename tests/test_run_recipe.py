@@ -588,6 +588,29 @@ class TestExtractBranch:
         ]
         assert _extract_branch(messages) is None
 
+    def test_handles_dict_arguments_from_native_api_chat(self):
+        # Regression: native /api/chat returns arguments as a dict (not a JSON
+        # string). _extract_branch used to json.loads() it unconditionally and
+        # crash the salvage path with TypeError. eval-24 surfaced this.
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "b1",
+                        "function": {
+                            "name": "github__create_branch",
+                            "arguments": {
+                                "branch": "runner/issue-51-foo",
+                                "from_branch": "develop",
+                            },
+                        },
+                    }
+                ],
+            },
+        ]
+        assert _extract_branch(messages) == "runner/issue-51-foo"
+
 
 class TestExtractIssueTitle:
     def test_pulls_title_from_issue_read_result(self):

@@ -691,10 +691,14 @@ def _extract_branch(messages: list) -> str | None:
         for tc in m.get("tool_calls") or []:
             if tc["function"]["name"] != "github__create_branch":
                 continue
+            raw = tc["function"]["arguments"]
+            # Native /api/chat returns arguments as a dict; OpenAI-compat as a
+            # JSON string. Mirror the dispatch loop's fallback so salvage's
+            # branch-recovery path works against either shape.
             try:
-                args = json.loads(tc["function"]["arguments"])
-            except json.JSONDecodeError:
-                continue
+                args = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                args = raw if isinstance(raw, dict) else {}
             if args.get("branch"):
                 return args["branch"]
     return None
