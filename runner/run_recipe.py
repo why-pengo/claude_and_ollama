@@ -653,6 +653,122 @@ GENERIC_CONTINUE_PROMPT = (
 )
 
 
+def parse_prose_tool_call(content: str, dispatch_keys) -> tuple[str, dict] | None:
+    """Try to recover a structured tool call from prose-channel content.
+
+    Returns (fn_name, fn_args) on hit, None on miss.
+
+    eval-26 (llama3.3:70b q3) and eval-29 (qwen2.5-coder:32b) both showed
+    models that knew the right tool call format and emitted well-formed
+    tool-call JSON — but in the content channel instead of via the
+    structured `tool_calls` field. The dispatch loop saw no tool calls,
+    treated the turn as no-op, and the empty-turn / loop-detect guard
+    eventually aborted the session. This rescue parses those into the
+    same shape a structured tool call would have taken so the dispatch
+    path can run unchanged.
+
+    Accepts both `arguments` (OpenAI/qwen convention) and `parameters`
+    (llama convention) for the args field. Tolerates a leading `type:
+    "function"` wrapper key. Normalizes a single-underscore prefix like
+    `github_create_or_update_file` to the double-underscore form the
+    DISPATCH dict actually uses — llama3.3 emits the single form.
+
+    `dispatch_keys` is the set/dict of recognised tool names; the rescue
+    only fires when the parsed name resolves to a real tool. Refuses
+    plausible-but-unknown names rather than dispatching garbage.
+    """
+    if not content or '"name"' not in content:
+        return None
+
+    obj = _try_load_json(content.strip())
+    if obj is None:
+        obj = _find_embedded_json_with_name(content)
+        if obj is None:
+            return None
+
+    name = obj.get("name")
+    if not isinstance(name, str):
+        return None
+
+    args = obj.get("arguments")
+    if args is None:
+        args = obj.get("parameters")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return None
+
+    if name not in dispatch_keys and "_" in name:
+        normalized = name.replace("_", "__", 1)
+        if normalized in dispatch_keys:
+            name = normalized
+
+    if name not in dispatch_keys:
+        return None
+
+    return name, args
+
+
+def _try_load_json(s: str) -> dict | None:
+    # Models sometimes wrap JSON in a markdown fence; strip the common forms
+    # before attempting json.loads. Leaves non-fenced content untouched.
+    stripped = s.strip()
+    for fence in ("```json", "```"):
+        if stripped.startswith(fence):
+            stripped = stripped[len(fence) :].lstrip()
+            break
+    if stripped.endswith("```"):
+        stripped = stripped[:-3].rstrip()
+    try:
+        result = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _find_embedded_json_with_name(content: str) -> dict | None:
+    """Scan for a balanced JSON object containing a `name` key.
+
+    Brace-balanced rather than regex-based so nested objects and quoted
+    braces inside strings don't trip us up. Returns the first matching
+    object so prose like "I'll call: {name: ..., args: ...}" works.
+    """
+    i = 0
+    n = len(content)
+    while i < n:
+        if content[i] != "{":
+            i += 1
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for j in range(i, n):
+            c = content[j]
+            if escape:
+                escape = False
+                continue
+            if c == "\\":
+                escape = True
+                continue
+            if c == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = content[i : j + 1]
+                    obj = _try_load_json(candidate)
+                    if isinstance(obj, dict) and "name" in obj:
+                        return obj
+                    break
+        i += 1
+    return None
+
+
 def turn_signature(msg: dict) -> tuple:
     """Hashable signature of one assistant turn, for loop detection.
 
@@ -885,6 +1001,23 @@ def run_session(
             for i, tc in enumerate(msg.get("tool_calls") or []):
                 if "id" not in tc:
                     tc["id"] = f"call_{turn}_{i}"
+
+            # Prose-shaped tool call rescue (#84). If the model emitted tool
+            # call JSON in the content channel rather than via tool_calls,
+            # synthesize the structured form IN PLACE on msg before appending.
+            # The rest of the loop then runs unchanged — both dispatch and the
+            # message history see this as a normal tool-call turn.
+            if not (msg.get("tool_calls") or []) and msg.get("content"):
+                rescued = parse_prose_tool_call(msg["content"], DISPATCH)
+                if rescued is not None:
+                    fn_name, fn_args = rescued
+                    msg["tool_calls"] = [
+                        {
+                            "id": f"rescued_{turn}",
+                            "function": {"name": fn_name, "arguments": fn_args},
+                        }
+                    ]
+                    print(f"\n  [runner: rescued prose-shaped tool call → {fn_name}]")
 
             messages.append(msg)
 
