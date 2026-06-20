@@ -698,8 +698,11 @@ def parse_prose_tool_call(content: str, dispatch_keys) -> tuple[str, dict] | Non
     if not isinstance(args, dict):
         return None
 
-    if name not in dispatch_keys and "_" in name:
-        normalized = name.replace("_", "__", 1)
+    # Scoped to the `github_X` → `github__X` case observed in eval-26;
+    # broader "double the first underscore" would let any unknown tool
+    # name accidentally coerce to a valid dispatch key.
+    if name not in dispatch_keys and name.startswith("github_") and not name.startswith("github__"):
+        normalized = "github__" + name[len("github_") :]
         if normalized in dispatch_keys:
             name = normalized
 

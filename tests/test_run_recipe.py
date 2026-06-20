@@ -708,6 +708,16 @@ class TestParseProseToolCall:
         fn_name, _ = result
         assert fn_name == "github__create_or_update_file"
 
+    def test_normalization_is_scoped_to_github_prefix(self):
+        # Regression guard against the broader "double the first underscore"
+        # form the normalization used to take. A hypothetical future tool
+        # like `slack__post_message` would mean an unknown name like
+        # `slack_post_message` should NOT be coerced to it just because the
+        # underscore-doubling happens to match.
+        dispatch_with_slack = DISPATCH_FIXTURE | {"slack__post_message"}
+        content = '{"name": "slack_post_message", "arguments": {"channel": "x"}}'
+        assert parse_prose_tool_call(content, dispatch_with_slack) is None
+
     def test_json_wrapped_in_prose(self):
         content = (
             "I'll need to read the issue first. Calling: "
