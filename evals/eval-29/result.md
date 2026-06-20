@@ -28,9 +28,9 @@
 
 ## Verdict
 
-Verdict: **FAIL** (re-classified: this is a harness-coverage gap, not a model competence gap)
+Verdict: FAIL
 
-The model knew the correct tool name. The model knew the correct argument shape. The model produced clean JSON. The runner couldn't see any of it because it lived in the wrong channel.
+Re-classified at write-up time: this is a harness-coverage gap, not a model competence gap. The model knew the correct tool name. The model knew the correct argument shape. The model produced clean JSON. The runner couldn't see any of it because it lived in the wrong channel.
 
 ## Next time / what this triggered
 

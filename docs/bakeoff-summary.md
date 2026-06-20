@@ -12,6 +12,8 @@ Three candidates evaluated 3-of-3 against the same task on bazzite under the pos
 | qwen3-coder:30b-a3b-q4_K_M | 2/3 | 1/3 | 0 | 17 |
 | qwen2.5-coder:32b | 1/3 | 1/3 | 1/3 | 9 (single run) |
 
+> **Recommendation strength.** Based on N=3 per candidate, against one canonical task, at Ollama's default temperature. Strong enough to keep the existing default; not strong enough to claim qwen3.6 dominates its alternatives across all conditions. A wider sample, lower temperature (#89), or a different task shape could reorder the speed/reliability trade-off — the conditions under which this should be re-evaluated are listed at the bottom.
+
 ## Methodology
 
 - **Task**: `why-pengo/health_track#51` (GET /api/hydration/daily — combined per-day shape) across every run. Multi-file backend issue conforming to the canonical issue format. Picked per #47's subtask 1.
@@ -19,7 +21,7 @@ Three candidates evaluated 3-of-3 against the same task on bazzite under the pos
 - **Hardware**: bazzite — RTX 5090 (32 GB VRAM), Ryzen 9 9900X, 96 GB RAM, Ollama 0.30.7.
 - **Configuration**: f16 KV cache (no quantization — `OLLAMA_KV_CACHE_TYPE` removed per the parked-offload decision in `docs/offload-config.md`). `OLLAMA_FLASH_ATTENTION=1`. Per-request `num_ctx` set to each candidate's resident ceiling.
 - **Pre-flight**: each candidate warmed at the target `num_ctx`, verified `processor: 100% GPU` via `/api/ps` before kickoff.
-- **Harness features active**: loop detection (#85, default threshold 4) and prose-shaped tool-call rescue (#84) on every run.
+- **Harness features active**: loop detection (#85, default threshold 4) on every run; prose-shaped tool-call rescue (#84) on every run *except eval-29*, which captured the pre-#84 failure mode as the historical proof that #84 was needed.
 - **Temperature**: Ollama default (0.8) on every run — see #89 for the per-candidate temperature-tuning question this opens.
 
 ## Candidates
@@ -43,7 +45,7 @@ Three candidates evaluated 3-of-3 against the same task on bazzite under the pos
 
 **Pattern**: cleanest execution when it works — eval-27 at 16 turns was the cleanest run in project history at the time. But carries a tail-risk: after opening its PR, the model may continue past `recipe_done` and accumulate duplicate calls. #85 catches this.
 
-All three runs landed PRs on health_track (#76, #78, #77 respectively).
+All three runs produced review-able PRs on health_track. PR-number attribution is subtle here: eval-27 cleanly opened PR #76 and eval-27b cleanly opened PR #78. eval-27c picked a branch slug that matched an earlier run's branch (the model log shows it explicitly noting "the branch already exists"), so its salvage step found PR #77 already on that branch — we can't conclude from the runner's logs alone whether eval-27c's `create_pull_request` call landed PR #77 or whether #77 was inherited from a prior same-slug run.
 
 ### qwen3.6:latest (36B)
 
@@ -112,7 +114,7 @@ Speed differences are interesting but secondary — a 9-turn run that happens 1-
 
 2. **#84 is load-bearing for qwen2.5-coder, not optional.** Without the prose-shaped-tool-call rescue, every qwen2.5-coder run is eval-29: a 3-turn FAIL with no artifact. With it, the model can produce competitive PASSes. The rescue is the difference between "model can drive the recipe" and "model is unusable" for this candidate. Any future candidate that doesn't use native `tool_calls` is similarly gated on #84.
 
-3. **#85 fired in production twice.** eval-27c and eval-30b both opened their PR cleanly then got stuck in post-PR comment loops. Without loop detection both would have burned all 60 turns producing only duplicate API errors. Loop detection cut those runs to 28 turns each — the difference between "wasted ~3 minutes" and "wasted ~10 minutes" per bad run.
+3. **#85 fired in production twice.** eval-27c and eval-30b both produced their PR artifact early then got stuck in post-PR comment loops. Without loop detection both would have burned all 60 turns producing only duplicate API errors. Loop detection cut those runs to 28 turns — roughly half the wall-clock the 60-turn cap would have taken. (Exact minutes aren't recorded in the runner output and the GIN-access-log timings vary per-turn; the savings is "noticeable" not "precisely 60%".)
 
 4. **Code-tuned models overshoot more than the general-purpose candidate.** Both qwen3-coder (27c) and qwen2.5-coder (30b) showed the "PR opened, but the model keeps going" pattern. qwen3.6 didn't do this in any of its 3 runs. Hypothesis: code-tuned training biases toward "complete the work thoroughly," which past `recipe_done` becomes overshoot. Worth investigating with temperature tuning under #89, or with stronger explicit-stop signals in the system prompt.
 
@@ -134,4 +136,4 @@ Conditions under which this should be re-evaluated:
 - **No code-quality review of the produced PRs.** Reliability is one axis of "which model is best"; correctness is the other. **See #47 subtask 5.**
 - **All runs at default temperature (0.8).** Lower temperature would likely tighten the code-tuned candidates' variance. **See #89.**
 - **One task.** The bake-off ran against a single canonical issue. Different issue shapes (frontend-heavy, refactors, multi-file Python services other than the hydration shape) might reorder the candidates. Not surveyed; out of scope for this round.
-- **`OLLAMA_DEBUG_LOG_REQUESTS=true` is still in `scripts/start-ollama-bazzite.sh`** and accumulating dump files. Reverted in this bundle's script-update commit.
+- **`OLLAMA_DEBUG_LOG_REQUESTS=true` reverted from `scripts/start-ollama-bazzite.sh`** in this PR's first commit. While set during the bake-off it dumped one request-body JSON per `/api/chat` call into `/tmp/ollama-request-logs-*/` on bazzite. Clean those up if you haven't: `ssh bazzite.local 'rm -rf /tmp/ollama-request-logs-*'`.

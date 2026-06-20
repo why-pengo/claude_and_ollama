@@ -33,7 +33,7 @@
 
 ## Verdict
 
-Verdict: **PASS**
+Verdict: PASS
 
 Proves #84 closes the eval-29 gap. With the rescue active, qwen2.5-coder:32b becomes a viable runner candidate — and a remarkably fast one when it executes cleanly. Whether this 9-turn cleanness is reproducible is the question 30b and 30c answer (spoiler: it's not — see `docs/bakeoff-summary.md` for the variance picture).
 

@@ -23,7 +23,7 @@
 
 ## Verdict
 
-Verdict: **FAIL**
+Verdict: FAIL
 
 No new artifact from this run. Different failure mode from eval-29: there the model emitted *clean* tool-call JSON in the wrong channel (rescue covered it once #84 existed). Here the model emitted a *non-tool-shaped* prose blob that the rescue can't recover from. This is the variance qwen2.5-coder shows under default temperature — not a rescue gap.
 

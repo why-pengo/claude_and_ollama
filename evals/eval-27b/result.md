@@ -29,7 +29,7 @@ get_file_contents (AGENTS.md) → issue_read → create_branch → create_branch
 
 ## Verdict
 
-Verdict: **PASS**
+Verdict: PASS
 
 Second clean 3-of-3 PASS for qwen3-coder. The minor branch-creation retry is noise compared to the substantive overshoot pattern that 27c exposed; comparison and significance live in `docs/bakeoff-summary.md`.
 

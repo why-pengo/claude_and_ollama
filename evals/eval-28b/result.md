@@ -25,7 +25,7 @@
 
 ## Verdict
 
-Verdict: **PASS**
+Verdict: PASS
 
 Confirms qwen3.6's reliability holds even when the run is "messy." The 28-turn count is on the high end of its range, but it still completed. See `docs/bakeoff-summary.md` for the comparative reliability finding.
 

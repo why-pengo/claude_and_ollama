@@ -63,7 +63,7 @@ Caveats for the bake-off summary (not failures of this run, but bookkeeping):
 
 ## Verdict
 
-Verdict: **PASS**
+Verdict: PASS
 
 First fully-resident, f16-KV, native-tool-calling, end-to-end bake-off PASS. Sets a new baseline for what the runner is capable of when the model side cooperates.
 

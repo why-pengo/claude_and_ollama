@@ -25,7 +25,7 @@
 
 ## Verdict
 
-Verdict: **PASS**
+Verdict: PASS
 
 Confirms qwen3.6 still drives the recipe cleanly under the new f16-KV / per-request configuration. Verbose but correct — the personality from eval-22/23 holds. Detailed comparison with the other candidates in `docs/bakeoff-summary.md`.
 

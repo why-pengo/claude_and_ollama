@@ -24,7 +24,7 @@
 
 ## Verdict
 
-Verdict: **PASS**
+Verdict: PASS
 
 Completes qwen3.6's **3/3 PASS** in the #47 bake-off — the only candidate to hit 3/3 in this round. Turn counts across runs: 23, 28, 21 (avg 24). See `docs/bakeoff-summary.md` for the recommendation that follows.
 

@@ -28,7 +28,7 @@
 
 ## Verdict
 
-Verdict: **PARTIAL**
+Verdict: PARTIAL
 
 PR #77 landed cleanly with all the issue's required files; the model's confusion came AFTER the artifact was complete. From a "did the runner produce a review-able PR" perspective this is a success. From a "did the recipe complete cleanly" perspective it's a partial. Loop detection (#85) saved the run from burning ~3× the turns it actually used.
 
