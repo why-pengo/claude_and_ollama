@@ -10,6 +10,7 @@ import textwrap
 import httpx
 import pytest
 
+import run_recipe
 from run_recipe import (
     GENERIC_CONTINUE_PROMPT,
     TOOL_RESULT_SIZE_CAP,
@@ -21,8 +22,10 @@ from run_recipe import (
     load_recipe,
     ollama_chat,
     recipe_done,
+    run_session,
     step_aware_continue_prompt,
     template_recipe,
+    turn_signature,
 )
 
 # ---------------------------------------------------------------------------
@@ -645,3 +648,233 @@ class TestExtractIssueTitle:
             },
         ]
         assert _extract_issue_title(messages) is None
+
+
+# ---------------------------------------------------------------------------
+# turn_signature — hashable per-turn signature for #85 loop detection
+# ---------------------------------------------------------------------------
+
+
+class TestTurnSignature:
+    def test_identical_tool_calls_match(self):
+        a = {
+            "tool_calls": [
+                {"function": {"name": "github__get_file_contents", "arguments": '{"path": "x"}'}}
+            ]
+        }
+        b = {
+            "tool_calls": [
+                {"function": {"name": "github__get_file_contents", "arguments": '{"path": "x"}'}}
+            ]
+        }
+        assert turn_signature(a) == turn_signature(b)
+
+    def test_different_args_dont_match(self):
+        a = {
+            "tool_calls": [
+                {"function": {"name": "github__get_file_contents", "arguments": '{"path": "x"}'}}
+            ]
+        }
+        b = {
+            "tool_calls": [
+                {"function": {"name": "github__get_file_contents", "arguments": '{"path": "y"}'}}
+            ]
+        }
+        assert turn_signature(a) != turn_signature(b)
+
+    def test_arguments_as_string_and_dict_canonicalize_equal(self):
+        # /api/chat returns arguments as a dict; some other providers as a
+        # JSON string. Same logical call must produce the same signature.
+        as_string = {"tool_calls": [{"function": {"name": "f", "arguments": '{"a": 1, "b": 2}'}}]}
+        as_dict = {"tool_calls": [{"function": {"name": "f", "arguments": {"a": 1, "b": 2}}}]}
+        assert turn_signature(as_string) == turn_signature(as_dict)
+
+    def test_arg_key_ordering_does_not_affect_signature(self):
+        a = {"tool_calls": [{"function": {"name": "f", "arguments": {"a": 1, "b": 2}}}]}
+        b = {"tool_calls": [{"function": {"name": "f", "arguments": {"b": 2, "a": 1}}}]}
+        assert turn_signature(a) == turn_signature(b)
+
+    def test_prose_turns_match_on_equal_content(self):
+        a = {"content": "I cannot do this task without more context."}
+        b = {"content": "I cannot do this task without more context."}
+        assert turn_signature(a) == turn_signature(b)
+
+    def test_prose_turns_differ_on_different_content(self):
+        a = {"content": "blob A"}
+        b = {"content": "blob B"}
+        assert turn_signature(a) != turn_signature(b)
+
+    def test_tool_call_and_prose_never_match(self):
+        # Critical for the alternating pattern (eval-26) — a tool-call turn
+        # and a prose-only turn must produce different signatures even if
+        # both happen to be "empty-ish".
+        tc = {"tool_calls": [{"function": {"name": "f", "arguments": "{}"}}]}
+        prose = {"content": ""}
+        assert turn_signature(tc) != turn_signature(prose)
+
+
+# ---------------------------------------------------------------------------
+# run_session loop-detect — abort on repeated signature (#85)
+# ---------------------------------------------------------------------------
+
+
+def _scripted_chat(scripted_responses: list[dict]):
+    """Factory: returns an ollama_chat replacement that pops scripted
+    responses in order. Tests inject this via monkeypatch to drive
+    run_session through a deterministic sequence of model outputs.
+    """
+    queue = list(scripted_responses)
+
+    def fake_chat(client, host, model, messages, tool_schemas, options=None):
+        if not queue:
+            raise AssertionError(
+                "ollama_chat called past end of scripted responses — "
+                "test expected the session to have ended by now"
+            )
+        return {"message": queue.pop(0), "done_reason": "stop"}
+
+    return fake_chat
+
+
+def _minimal_recipe(tmp_path):
+    """Write the smallest possible recipe yaml that load_recipe accepts.
+    Empty steps list keeps step_aware_continue_prompt falling back to the
+    generic continue prompt without us having to fixture a step graph.
+    """
+    recipe = tmp_path / "recipe.yaml"
+    recipe.write_text("title: Test\nprompt: 'go'\nsteps: []\n")
+    return recipe
+
+
+def _ok_dispatch():
+    """DISPATCH stand-in: every tool returns "OK" and counts as a success."""
+    return {
+        "github__issue_read": lambda args: '{"number": 1, "title": "t"}',
+        "github__get_file_contents": lambda args: "file contents",
+        "github__create_branch": lambda args: "OK",
+        "github__create_or_update_file": lambda args: "OK",
+        "github__push_files": lambda args: "OK",
+        "github__create_pull_request": lambda args: "OK",
+        "github__add_issue_comment": lambda args: "OK",
+    }
+
+
+def _tool_call_msg(name: str, args: dict) -> dict:
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"function": {"name": name, "arguments": args}}],
+    }
+
+
+def _prose_msg(content: str) -> dict:
+    return {"role": "assistant", "content": content, "tool_calls": []}
+
+
+class TestRunSessionLoopDetect:
+    """Covers the eval-26 sampling-collapse failure mode.
+
+    Strategy: monkeypatch ollama_chat + DISPATCH + attempt_salvage so the
+    session runs entirely off scripted in-memory data. The thing under
+    test is the return code from run_session: 4 means loop detected;
+    anything else means the guard didn't fire.
+    """
+
+    def _runs(self, monkeypatch, tmp_path, scripted, **kwargs):
+        monkeypatch.setattr(run_recipe, "ollama_chat", _scripted_chat(scripted))
+        monkeypatch.setattr(run_recipe, "DISPATCH", _ok_dispatch())
+        monkeypatch.setattr(run_recipe, "attempt_salvage", lambda *a, **kw: None)
+        recipe = _minimal_recipe(tmp_path)
+        return run_session(
+            host="http://example",
+            model="m",
+            recipe_path=recipe,
+            # The system prompt references {{ base_branch }} / {{ repo }};
+            # pass placeholders so template_recipe doesn't raise.
+            params={"base_branch": "main", "repo": "owner/repo", "issue_number": "1"},
+            max_turns=kwargs.get("max_turns", 20),
+            salvage_enabled=False,
+            loop_detect_threshold=kwargs.get("loop_detect_threshold", 4),
+            turn_timeout=10.0,
+        )
+
+    def test_identical_repeats_abort_at_threshold(self, monkeypatch, tmp_path):
+        # The first sighting of any tool name registers as progress (newly
+        # added to `succeeded`), which clears the counter — so 4 identical
+        # repeats from a fresh session sit at count=3 after turn 4.
+        # Five identical calls = 1 priming-progress + 4 no-progress repeats,
+        # which is the natural threshold trip and mirrors what eval-26 did
+        # at much higher repetition counts.
+        scripted = [_tool_call_msg("github__get_file_contents", {"path": "x"})] * 5
+        rc = self._runs(monkeypatch, tmp_path, scripted)
+        assert rc == 4
+
+    def test_three_identical_then_progress_does_not_trip(self, monkeypatch, tmp_path):
+        # Three reads of the same file (legitimate: "read, look at it, read
+        # again to verify after my own edit"). Then a fresh tool name reaches
+        # succeeded, then recipe_done closes the session.
+        scripted = [
+            _tool_call_msg("github__get_file_contents", {"path": "x"}),
+            _tool_call_msg("github__get_file_contents", {"path": "x"}),
+            _tool_call_msg("github__get_file_contents", {"path": "x"}),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        rc = self._runs(monkeypatch, tmp_path, scripted)
+        assert rc == 0  # recipe_done, not loop-aborted
+
+    def test_alternating_tool_call_and_prose_trips_the_guard(self, monkeypatch, tmp_path):
+        # This is what eval-26 actually looked like: real tool call X, then
+        # a prose blob (the model "thinks" it's emitting another tool call
+        # but it lands as content), then X again, then prose, etc. The
+        # consecutive-empty-turn guard never fires because the tool-call
+        # turn keeps resetting it. The Counter-based loop detect catches it
+        # because X's count climbs every two turns.
+        x = _tool_call_msg("github__get_file_contents", {"path": "x"})
+        prose = _prose_msg('{"name": "create_or_update_file", "args": {...}}')
+        scripted = [x, prose, x, prose, x, prose, x, prose]
+        # X hits count=4 on the 7th turn (turn indices 1,3,5,7).
+        rc = self._runs(monkeypatch, tmp_path, scripted)
+        assert rc == 4
+
+    def test_progress_in_middle_resets_the_counter(self, monkeypatch, tmp_path):
+        # Three identical reads, then a NEW tool name reaches succeeded
+        # (resets the Counter), then three more identical reads — the
+        # original signature's count never reaches 4 in a single window.
+        # Session ends via recipe_done after the PR + comment.
+        x = _tool_call_msg("github__get_file_contents", {"path": "x"})
+        scripted = [
+            x,
+            x,
+            x,
+            _tool_call_msg("github__create_branch", {}),  # progress: clears Counter
+            x,
+            x,
+            x,
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        rc = self._runs(monkeypatch, tmp_path, scripted)
+        assert rc == 0
+
+    def test_no_loop_detect_disables_guard(self, monkeypatch, tmp_path):
+        # With threshold=None, even 5 identical no-progress turns must not
+        # trip — caller has explicitly asked to investigate behaviour that
+        # would otherwise abort.
+        x = _tool_call_msg("github__get_file_contents", {"path": "x"})
+        scripted = [
+            x,
+            x,
+            x,
+            x,
+            x,
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        rc = self._runs(
+            monkeypatch,
+            tmp_path,
+            scripted,
+            loop_detect_threshold=None,
+        )
+        assert rc == 0
