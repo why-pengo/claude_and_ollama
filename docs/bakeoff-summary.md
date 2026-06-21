@@ -1,6 +1,6 @@
 # Bake-off summary — runner default model evaluation (#47)
 
-> **Note (2026-06-21, correction):** The architecture characterization of `qwen3.6:latest` was incomplete in the original write-up. `/api/show` reports `general.architecture=qwen35moe` with 256 experts, top-8 active — it is a Qwen 3.5-family MoE, not a dense 36B model. Active params per token are roughly 3–5B (8/256 of the MoE plus shared attention). This explains the high observed throughput (~250 t/s gen on the #88 smoke check) and means the bake-off compared two MoE candidates (`qwen3.6`, `qwen3-coder`) against one dense candidate (`qwen2.5-coder`). The 3/3 PASS verdict and the recommendation both still hold; inline annotations below have been amended.
+> **Note (2026-06-21, correction):** The architecture characterization of `qwen3.6:latest` was incomplete in the original write-up. `/api/show` reports `general.architecture=qwen35moe` with 256 experts, top-8 active — it is a Qwen 3.5-family MoE, not a dense 36B model. Active params per token are roughly 3–5B (8/256 of the MoE plus shared attention). This explains the high observed throughput (~250 t/s gen on the PR #94 smoke check for #88) and means the bake-off compared two MoE candidates (`qwen3.6`, `qwen3-coder`) against one dense candidate (`qwen2.5-coder`). The 3/3 PASS verdict and the recommendation both still hold; inline annotations below have been amended.
 
 ## TL;DR
 
