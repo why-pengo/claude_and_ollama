@@ -535,6 +535,90 @@ def ollama_chat(
     return r.json()
 
 
+# Ollama's /api/chat response includes per-call timing fields. Durations
+# are in nanoseconds. Extracted shape is used by the per-turn log line and
+# the end-of-session summary. See #88.
+_METRIC_KEYS = (
+    "prompt_eval_count",
+    "prompt_eval_duration",
+    "eval_count",
+    "eval_duration",
+    "total_duration",
+    "load_duration",
+)
+
+
+def extract_turn_metrics(resp: dict) -> dict | None:
+    """Pluck Ollama's timing fields from a /api/chat response.
+
+    Returns a dict with all _METRIC_KEYS (missing fields set to None), or
+    None if none of the fields are present — keeps the runner quiet for
+    mocked responses and non-Ollama backends that don't populate them.
+    """
+    extracted = {k: resp.get(k) for k in _METRIC_KEYS}
+    if all(v is None for v in extracted.values()):
+        return None
+    return extracted
+
+
+def _rate(count, duration_ns) -> str:
+    # None → missing field; duration==0 → can't divide. count==0 is a
+    # legitimate zero-token turn — render as "0.0", not "?", so a real
+    # zero stays distinguishable from a missing field in the log.
+    if count is None or duration_ns is None or duration_ns == 0:
+        return "?"
+    return f"{count / (duration_ns / 1e9):.1f}"
+
+
+def format_turn_metrics(metrics: dict) -> str:
+    """Render the per-turn one-liner specified in #88."""
+    pe = metrics.get("prompt_eval_count")
+    pd = metrics.get("prompt_eval_duration")
+    ec = metrics.get("eval_count")
+    ed = metrics.get("eval_duration")
+    td = metrics.get("total_duration")
+    return (
+        f"[metrics: prompt={'?' if pe is None else pe} tok @ {_rate(pe, pd)} t/s | "
+        f"gen={'?' if ec is None else ec} tok @ {_rate(ec, ed)} t/s | "
+        f"total={'?' if td is None else f'{td / 1e9:.1f}'}s]"
+    )
+
+
+def format_session_metrics_summary(turn_metrics: list[dict]) -> str:
+    """Aggregate per-turn metrics into a single end-of-session line.
+
+    Rates are weighted by tokens (sum tokens / sum duration), which matches
+    the effective throughput a future plot would care about — not the
+    arithmetic mean of per-turn rates.
+    """
+    if not turn_metrics:
+        return "[session metrics: turns=0 (no per-call metrics captured)]"
+
+    def paired_sum(count_key: str, dur_key: str) -> tuple[int, int]:
+        # Pair count+duration *within a turn* before summing — otherwise
+        # tokens from a turn missing its duration could combine with the
+        # duration from a different turn, producing a nonsense rate.
+        # Ollama always emits the pair together; this just makes the code
+        # robust to a backend that doesn't.
+        c, d = 0, 0
+        for m in turn_metrics:
+            ck, dk = m.get(count_key), m.get(dur_key)
+            if ck is not None and dk is not None:
+                c += ck
+                d += dk
+        return c, d
+
+    pe, pd = paired_sum("prompt_eval_count", "prompt_eval_duration")
+    ec, ed = paired_sum("eval_count", "eval_duration")
+    td = sum(m["total_duration"] for m in turn_metrics if m.get("total_duration") is not None)
+    return (
+        f"[session metrics: turns={len(turn_metrics)} | "
+        f"prompt={pe} tok @ {_rate(pe, pd)} t/s | "
+        f"gen={ec} tok @ {_rate(ec, ed)} t/s | "
+        f"wall={td / 1e9:.1f}s]"
+    )
+
+
 def template_recipe(prompt: str, params: dict) -> str:
     """Replace {{ key }} placeholders with parameter values."""
 
@@ -980,6 +1064,9 @@ def run_session(
 
     succeeded: set[str] = set()
     empty_turn_count = 0
+    # Per-turn timing metrics extracted from each /api/chat response.
+    # Drives the per-turn log line and the end-of-session summary (#88).
+    turn_metrics: list[dict] = []
     # Counter of turn signatures since the last successful new tool name
     # reached `succeeded`. eval-26 showed sampling-collapse loops that
     # alternate identical tool calls with identical prose blobs, so the
@@ -995,6 +1082,10 @@ def run_session(
     with httpx.Client(timeout=turn_timeout) as client:
         for turn in range(1, max_turns + 1):
             resp = ollama_chat(client, host, model, messages, TOOL_SCHEMAS, options)
+            metrics = extract_turn_metrics(resp)
+            if metrics is not None:
+                turn_metrics.append(metrics)
+                print(f"  {format_turn_metrics(metrics)}")
             msg = resp["message"]
 
             # Native /api/chat omits `id` on tool calls. Synthesize one IN PLACE
@@ -1063,6 +1154,7 @@ def run_session(
                         succeeded.add(fn_name)
                 if recipe_done(succeeded):
                     print(f"\n=== Recipe complete: PR + issue comment both fired (turn {turn}) ===")
+                    print(format_session_metrics_summary(turn_metrics))
                     return 0
             else:
                 # No tool call this turn. THIS IS THE CRUX of the POC.
@@ -1074,12 +1166,14 @@ def run_session(
                 empty_turn_count += 1
                 if empty_turn_count >= 3:
                     print(f"\n=== 3 consecutive no-tool-call turns; giving up (turn {turn}) ===")
+                    print(format_session_metrics_summary(turn_metrics))
                     if salvage_enabled:
                         attempt_salvage(messages, params, succeeded)
                     return 2
 
                 if recipe_done(succeeded):
                     print(f"\n=== Recipe complete (turn {turn}) ===")
+                    print(format_session_metrics_summary(turn_metrics))
                     return 0
 
                 next_prompt = step_aware_continue_prompt(succeeded, recipe_steps)
@@ -1102,11 +1196,13 @@ def run_session(
                             f"{recent_signatures[sig]}x without progress; aborting "
                             f"(turn {turn}) ==="
                         )
+                        print(format_session_metrics_summary(turn_metrics))
                         if salvage_enabled:
                             attempt_salvage(messages, params, succeeded)
                         return 4
 
     print(f"\n=== Hit max_turns ({max_turns}); giving up ===")
+    print(format_session_metrics_summary(turn_metrics))
     if salvage_enabled:
         attempt_salvage(messages, params, succeeded)
     return 3
