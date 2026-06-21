@@ -104,39 +104,39 @@ When applying to a bake-off run's PR, capture this block as part of the eval's `
 ```
 PR #N (eval-XX, <model>)
 
-G1 automated checks: [PASS/FAIL]
-  - make check: [P/F]
-  - make test: [P/F]
-  - coverage: NN%
+G1 automated checks: [PASS / FAIL]
+  - make check: [PASS / FAIL]
+  - make test:  [PASS / FAIL]
+  - coverage:   NN%
 
 G2 acceptance criteria: [N/6 PASS]
-  - 1. mL→fl-oz conversion + 1dp: [P/P-/F]
-  - 2. mg pass-through + integer round: [P/P-/F]
-  - 3. missing metric → null not 0: [P/P-/F]
-  - 4. no row when all 5 missing: [P/P-/F]
-  - 5. JWT required (401 without): [P/P-/F]
-  - 6. response shape matches contract: [P/P-/F]
+  - 1. mL→fl-oz conversion + 1dp:       [PASS / PARTIAL / FAIL]
+  - 2. mg pass-through + integer round: [PASS / PARTIAL / FAIL]
+  - 3. missing metric → null not 0:     [PASS / PARTIAL / FAIL]
+  - 4. no row when all 5 missing:       [PASS / PARTIAL / FAIL]
+  - 5. JWT required (401 without):      [PASS / PARTIAL / FAIL]
+  - 6. response shape matches contract: [PASS / PARTIAL / FAIL]
 
-Q1 test coverage of criteria: [PASS/PARTIAL/FAIL]
+Q1 test coverage of criteria: [PASS / PARTIAL / FAIL]
   - missing test cases: <list, or "none">
 
 Q2 conventions: [N/5 PASS]
-  - SQLAlchemy 2.0 async: [P/F]
-  - timezone-aware UTC: [P/F]
-  - router registered correctly: [P/F]
-  - test file location/naming: [P/F]
-  - schema location/naming: [P/F]
+  - SQLAlchemy 2.0 async:         [PASS / FAIL]
+  - timezone-aware UTC:           [PASS / FAIL]
+  - router registered correctly:  [PASS / FAIL]
+  - test file location/naming:    [PASS / FAIL]
+  - schema location/naming:       [PASS / FAIL]
   - violations: <list, or "none">
 
 Q3 production-readiness: [N/5 agree]
-  - 1. names reflect purpose: [agree/partial/disagree]
-  - 2. appropriately scoped: [agree/partial/disagree]
-  - 3. maintainable 3 months out: [agree/partial/disagree]
-  - 4. tests catch regressions: [agree/partial/disagree]
-  - 5. would approve with minor/no comments: [agree/partial/disagree]
+  - 1. names reflect purpose:                    [agree / partially agree / disagree]
+  - 2. appropriately scoped:                     [agree / partially agree / disagree]
+  - 3. maintainable 3 months out:                [agree / partially agree / disagree]
+  - 4. tests catch regressions:                  [agree / partially agree / disagree]
+  - 5. would approve with minor/no comments:     [agree / partially agree / disagree]
   - notes: <freeform>
 
-Overall: [PASS/PARTIAL PASS/FAIL]
+Overall: [PASS / PARTIAL PASS / FAIL]
 ```
 
 ## How this differs from Szych & Schwerk
