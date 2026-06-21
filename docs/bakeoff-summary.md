@@ -1,5 +1,7 @@
 # Bake-off summary — runner default model evaluation (#47)
 
+> **Note (2026-06-21, correction):** The architecture characterization of `qwen3.6:latest` was incomplete in the original write-up. `/api/show` reports `general.architecture=qwen35moe` with 256 experts, top-8 active — it is a Qwen 3.5-family MoE, not a dense 36B model. Active params per token are roughly 3–5B (8/256 of the MoE plus shared attention). This explains the high observed throughput (~250 t/s gen on the #88 smoke check) and means the bake-off compared two MoE candidates (`qwen3.6`, `qwen3-coder`) against one dense candidate (`qwen2.5-coder`). The 3/3 PASS verdict and the recommendation both still hold; inline annotations below have been amended.
+
 ## TL;DR
 
 **Recommendation: keep `qwen3.6:latest` as the default `RUNNER_MODEL`.**
@@ -8,7 +10,7 @@ Three candidates evaluated 3-of-3 against the same task on bazzite under the pos
 
 | Candidate | PASS | PARTIAL | FAIL | Avg turns (PASS) |
 |---|---|---|---|---|
-| **qwen3.6:latest (36B)** | **3/3** | 0 | 0 | 24 |
+| **qwen3.6:latest (MoE, 36B total / ~3–5B active)** | **3/3** | 0 | 0 | 24 |
 | qwen3-coder:30b-a3b-q4_K_M | 2/3 | 1/3 | 0 | 17 |
 | qwen2.5-coder:32b | 1/3 | 1/3 | 1/3 | 9 (single run) |
 
@@ -29,8 +31,8 @@ Three candidates evaluated 3-of-3 against the same task on bazzite under the pos
 | Candidate | Context | Status | Rationale |
 |---|---|---|---|
 | qwen3-coder:30b-a3b-q4_K_M | 102400 | Evaluated | MoE (active ~3B), code-tuned, fully GPU resident at 100k |
-| qwen3.6:latest (36B) | 65536 | Evaluated | Existing default; reliable baseline from eval-22/23 |
-| qwen2.5-coder:32b | 98304 | Evaluated | Code-tuned; failed eval-04 under Goose but the runner + #84 deserve a fair re-eval |
+| qwen3.6:latest | 65536 | Evaluated | MoE 256/8 (~3–5B active, 36B total), general-purpose; existing default; reliable baseline from eval-22/23 |
+| qwen2.5-coder:32b | 98304 | Evaluated | Dense 32B, code-tuned; failed eval-04 under Goose but the runner + #84 deserve a fair re-eval |
 | llama3.3:70b-instruct-q3_K_M | n/a | **DQ'd** | Required CPU offload to fit on the 5090; parked as a production lane on 2026-06-20 (see `docs/offload-config.md`) |
 
 ## Per-candidate results
@@ -47,7 +49,7 @@ Three candidates evaluated 3-of-3 against the same task on bazzite under the pos
 
 All three runs produced review-able PRs on health_track. PR-number attribution is subtle here: eval-27 cleanly opened PR #76 and eval-27b cleanly opened PR #78. eval-27c picked a branch slug that matched an earlier run's branch (the model log shows it explicitly noting "the branch already exists"), so its salvage step found PR #77 already on that branch — we can't conclude from the runner's logs alone whether eval-27c's `create_pull_request` call landed PR #77 or whether #77 was inherited from a prior same-slug run.
 
-### qwen3.6:latest (36B)
+### qwen3.6:latest (MoE, 36B total / ~3–5B active)
 
 | Eval | Verdict | Turns | Notes |
 |---|---|---|---|
@@ -116,7 +118,7 @@ Speed differences are interesting but secondary — a 9-turn run that happens 1-
 
 3. **#85 fired in production twice.** eval-27c and eval-30b both produced their PR artifact early then got stuck in post-PR comment loops. Without loop detection both would have burned all 60 turns producing only duplicate API errors. Loop detection cut those runs to 28 turns — roughly half the wall-clock the 60-turn cap would have taken. (Exact minutes aren't recorded in the runner output and the GIN-access-log timings vary per-turn; the savings is "noticeable" not "precisely 60%".)
 
-4. **Code-tuned models overshoot more than the general-purpose candidate.** Both qwen3-coder (27c) and qwen2.5-coder (30b) showed the "PR opened, but the model keeps going" pattern. qwen3.6 didn't do this in any of its 3 runs. Hypothesis: code-tuned training biases toward "complete the work thoroughly," which past `recipe_done` becomes overshoot. Worth investigating with temperature tuning under #89, or with stronger explicit-stop signals in the system prompt.
+4. **Code-tuned models overshoot more than the general-purpose candidate.** Both qwen3-coder (27c) and qwen2.5-coder (30b) showed the "PR opened, but the model keeps going" pattern. qwen3.6 didn't do this in any of its 3 runs. Hypothesis: code-tuned training biases toward "complete the work thoroughly," which past `recipe_done` becomes overshoot. Worth investigating with temperature tuning under #89, or with stronger explicit-stop signals in the system prompt. (Architecture is a confounder, not a clean explanation: qwen3-coder is MoE and *also* overshot, so the pattern doesn't cleanly split on MoE-vs-dense; it tracks the code-tuned-vs-general-purpose axis instead.)
 
 5. **Verbose-but-correct beats fast-but-fragile for a default.** qwen3.6's "always needs a nudge, takes 24 turns" pattern is the production-suitable choice. A 24-turn PASS every time is worth more than a 9-turn PASS one time in three.
 
