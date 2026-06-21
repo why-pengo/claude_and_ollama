@@ -19,6 +19,9 @@ from run_recipe import (
     _extract_branch,
     _extract_issue_title,
     _tool_result_succeeded,
+    extract_turn_metrics,
+    format_session_metrics_summary,
+    format_turn_metrics,
     load_recipe,
     ollama_chat,
     parse_prose_tool_call,
@@ -332,6 +335,161 @@ class TestOllamaChat:
             ollama_chat(client, "http://example", "m", [], [], options={})
 
         assert "options" not in seen["payload"]
+
+
+# ---------------------------------------------------------------------------
+# extract_turn_metrics / format_turn_metrics / format_session_metrics_summary
+#   — Ollama /api/chat per-call timing surfacing (#88)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTurnMetrics:
+    def test_extracts_full_metric_block(self):
+        resp = {
+            "message": {"content": "ok"},
+            "total_duration": 9876543210,
+            "load_duration": 12345678,
+            "prompt_eval_count": 1234,
+            "prompt_eval_duration": 234567890,
+            "eval_count": 567,
+            "eval_duration": 8765432109,
+        }
+        m = extract_turn_metrics(resp)
+        assert m == {
+            "prompt_eval_count": 1234,
+            "prompt_eval_duration": 234567890,
+            "eval_count": 567,
+            "eval_duration": 8765432109,
+            "total_duration": 9876543210,
+            "load_duration": 12345678,
+        }
+
+    def test_partial_block_keeps_present_fields_and_nulls_missing(self):
+        # Some backends / mocked responses include only a subset. Missing
+        # fields must come through as None so downstream formatters can
+        # render them as "?" instead of crashing.
+        resp = {"message": {}, "eval_count": 100, "eval_duration": 1_000_000_000}
+        m = extract_turn_metrics(resp)
+        assert m == {
+            "prompt_eval_count": None,
+            "prompt_eval_duration": None,
+            "eval_count": 100,
+            "eval_duration": 1_000_000_000,
+            "total_duration": None,
+            "load_duration": None,
+        }
+
+    def test_returns_none_when_no_metric_fields_present(self):
+        # Bare response (mocked tests, non-Ollama backends) → None signals
+        # the runner to stay quiet rather than emitting an all-"?" line.
+        assert extract_turn_metrics({"message": {"content": "ok"}}) is None
+        assert extract_turn_metrics({}) is None
+
+
+class TestFormatTurnMetrics:
+    def test_renders_issue_88_format_verbatim(self):
+        # 1234 prompt tokens / 0.234567890s ≈ 5260.7 t/s
+        # 567 gen tokens    / 8.765432109s ≈ 64.7 t/s
+        # total = 9.876543210s              → 9.9s
+        m = {
+            "prompt_eval_count": 1234,
+            "prompt_eval_duration": 234567890,
+            "eval_count": 567,
+            "eval_duration": 8765432109,
+            "total_duration": 9876543210,
+            "load_duration": 12345678,
+        }
+        assert (
+            format_turn_metrics(m)
+            == "[metrics: prompt=1234 tok @ 5260.7 t/s | gen=567 tok @ 64.7 t/s | total=9.9s]"
+        )
+
+    def test_renders_missing_fields_as_question_marks(self):
+        m = {
+            "prompt_eval_count": None,
+            "prompt_eval_duration": None,
+            "eval_count": 567,
+            "eval_duration": 8765432109,
+            "total_duration": None,
+            "load_duration": None,
+        }
+        assert (
+            format_turn_metrics(m)
+            == "[metrics: prompt=? tok @ ? t/s | gen=567 tok @ 64.7 t/s | total=?s]"
+        )
+
+    def test_zero_duration_renders_rate_as_question_mark(self):
+        # Defensive: a zero duration would otherwise blow up with
+        # ZeroDivisionError. Render as "?" instead — same as missing.
+        m = {
+            "prompt_eval_count": 100,
+            "prompt_eval_duration": 0,
+            "eval_count": 0,
+            "eval_duration": 0,
+            "total_duration": 0,
+            "load_duration": 0,
+        }
+        assert (
+            format_turn_metrics(m)
+            == "[metrics: prompt=100 tok @ ? t/s | gen=0 tok @ ? t/s | total=0.0s]"
+        )
+
+
+class TestFormatSessionMetricsSummary:
+    def test_aggregates_by_summing_tokens_and_durations(self):
+        # Token-weighted rates (sum tok / sum dur), not arithmetic mean
+        # of per-turn rates — that's the "effective throughput" a plot wants.
+        turns = [
+            {
+                "prompt_eval_count": 100,
+                "prompt_eval_duration": 100_000_000,  # 0.1s → 1000 t/s
+                "eval_count": 50,
+                "eval_duration": 1_000_000_000,  # 1.0s → 50 t/s
+                "total_duration": 1_500_000_000,  # 1.5s
+                "load_duration": None,
+            },
+            {
+                "prompt_eval_count": 200,
+                "prompt_eval_duration": 100_000_000,  # 0.1s → 2000 t/s
+                "eval_count": 100,
+                "eval_duration": 2_000_000_000,  # 2.0s → 50 t/s
+                "total_duration": 2_500_000_000,  # 2.5s
+                "load_duration": None,
+            },
+        ]
+        # prompt: 300 / 0.2s = 1500.0 t/s; gen: 150 / 3.0s = 50.0 t/s; wall: 4.0s
+        assert format_session_metrics_summary(turns) == (
+            "[session metrics: turns=2 | prompt=300 tok @ 1500.0 t/s | "
+            "gen=150 tok @ 50.0 t/s | wall=4.0s]"
+        )
+
+    def test_empty_list_returns_no_metrics_line(self):
+        # An exit path with zero captured metrics (mocked backend, or an
+        # Ollama version that doesn't populate them) still gets a summary
+        # line — the marker is useful when grepping logs for run boundaries.
+        assert (
+            format_session_metrics_summary([])
+            == "[session metrics: turns=0 (no per-call metrics captured)]"
+        )
+
+    def test_partial_per_turn_fields_dont_crash(self):
+        # If some turns have missing fields (None), the aggregator should
+        # skip the Nones rather than crash on sum(None, int).
+        turns = [
+            {
+                "prompt_eval_count": 100,
+                "prompt_eval_duration": 100_000_000,
+                "eval_count": None,
+                "eval_duration": None,
+                "total_duration": 1_000_000_000,
+                "load_duration": None,
+            }
+        ]
+        # gen sums to 0 → rate renders as "?"
+        assert format_session_metrics_summary(turns) == (
+            "[session metrics: turns=1 | prompt=100 tok @ 1000.0 t/s | "
+            "gen=0 tok @ ? t/s | wall=1.0s]"
+        )
 
 
 # ---------------------------------------------------------------------------
