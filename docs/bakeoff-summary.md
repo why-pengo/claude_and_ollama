@@ -128,7 +128,7 @@ Speed differences are interesting but secondary — a 9-turn run that happens 1-
 
 Conditions under which this should be re-evaluated:
 
-- **qwen2.5-coder at `temperature=0.2`** (per #89) — if low-temperature tightens its variance to something like 3/3 PASS, it becomes the speed-winner candidate worth promoting.
+- **qwen2.5-coder at `temperature=0.2`** (resolved by #89 — see Appendix A) — variance did tighten (2 PASS + 1 PARTIAL vs 1 PASS + 1 PARTIAL + 1 FAIL at default temp), but not to 3/3. The remaining PARTIAL is the within-batch branch-slug collision pattern that's independent of temperature. qwen2.5-coder + low temp is the most promising alternative-default candidate identified to date, but the within-batch collision needs solving before it could ship.
 - **qwen3-coder with a post-PR stop signal** — if the overshoot pattern can be addressed via system prompt or temperature, qwen3-coder's clean speed becomes more attractive.
 - **A new qwen3 family release** (e.g. qwen3-coder at larger scale with native tool-call discipline, or qwen3 family with extended training on structured outputs).
 
@@ -136,6 +136,52 @@ Conditions under which this should be re-evaluated:
 
 - **No per-call throughput (t/s) curves under f16 KV.** Ollama 0.30.7's `OLLAMA_DEBUG=1` doesn't surface per-call `eval_rate` in the server log, and `OLLAMA_DEBUG_LOG_REQUESTS=true` was the wrong tool (request-body dump, not metrics). The actual fields exist in the `/api/chat` response body but the runner doesn't extract them. **See #88.**
 - **No code-quality review of the produced PRs.** Reliability is one axis of "which model is best"; correctness is the other. **See #47 subtask 5.**
-- **All runs at default temperature (0.8).** Lower temperature would likely tighten the code-tuned candidates' variance. **See #89.**
+- **All runs at default temperature (0.8).** Tested under #89; see Appendix A below. Net finding: low temperature is *not* a uniform tightening lever — it helps the prose-channel candidate (qwen2.5-coder) but hurts the native-tool-call candidates (qwen3-coder, qwen3.6). Default temperature stays uniform.
 - **One task.** The bake-off ran against a single canonical issue. Different issue shapes (frontend-heavy, refactors, multi-file Python services other than the hydration shape) might reorder the candidates. Not surveyed; out of scope for this round.
 - **`OLLAMA_DEBUG_LOG_REQUESTS=true` reverted from `scripts/start-ollama-bazzite.sh`** in this PR's first commit. While set during the bake-off it dumped one request-body JSON per `/api/chat` call into `/tmp/ollama-request-logs-*/` on bazzite. Clean those up if you haven't: `ssh bazzite.local 'rm -rf /tmp/ollama-request-logs-*'`.
+
+## Appendix A: Temperature tuning investigation (#89)
+
+Filed as a follow-up from this summary's "All runs at default temperature (0.8)" caveat. Re-ran each of the three evaluated candidates 3-of-3 at `temperature=0.2` against the same canonical task (`why-pengo/health_track#51`), with everything else matched to evals 27 / 28 / 30. Variance-first execution order: qwen2.5-coder → qwen3-coder → qwen3.6, so the highest-variance candidate's signal landed first.
+
+### Setup
+
+- Same recipe (`recipes/execute-issue.yaml`), same per-candidate `num_ctx` as the original bake-off (98304 / 102400 / 65536), same bazzite hardware + Ollama 0.30.7 / f16 KV.
+- `temperature=0.2` passed via `--ollama-option temperature=0.2`.
+- Per-call timing metrics surfaced via #88 (PR #94) — every eval-3X session.log now carries `[metrics: ...]` lines and an end-of-session summary, providing the per-call t/s curves the original bake-off lacked.
+- Cleaned up `why-pengo/health_track` PRs + branches between candidate batches so each batch ran against a clean target-repo state (cross-batch contamination was discovered and corrected mid-investigation — eval-32/32b/32c were re-run after the cleanup).
+
+### Per-candidate results
+
+| Candidate | Default temp (eval-27/28/30) | `temperature=0.2` (eval-31/32/33) | Direction |
+|---|---|---|---|
+| qwen2.5-coder:32b (dense) | 1 PASS + 1 PARTIAL + 1 FAIL | **2 PASS + 1 PARTIAL** | **Improved.** Lost the FAIL. PASSes faster (8 + 10 turns vs default 9; eval-31 set a new project record). The remaining PARTIAL is within-batch branch-slug collision, not temperature. |
+| qwen3-coder:30b-a3b-q4_K_M (MoE) | 2 PASS + 1 PARTIAL | 2 PASS + 1 PARTIAL | **Mixed.** PASS rate held. eval-32 was faster (15 vs 16 turns), but eval-32b's PASS took 55 turns vs default's 18 — heavy iterate-and-refine overshoot. PARTIAL was longer too (51 vs 28 turns). |
+| qwen3.6:latest (MoE, ~3–5B active) | 3/3 PASS | 2 PASS + 1 PARTIAL | **Regressed.** Lost a PASS (eval-33 hit a `get_file_contents` loop after committing 1 file; salvage opened PR #86 from the partial commit). The 2 PASSes were faster (19 turns each vs default 21–28), and eval-33c was the project's first qwen3.6 run to reach `recipe_done` with **zero nudges** — but predictability matters more than mean speed for a production default. |
+
+### Key finding: temperature interacts with tool-call channel discipline
+
+The directional split tracks how each candidate emits tool calls, not whether it's "code-tuned" or "MoE":
+
+- **Prose-channel models** (qwen2.5-coder emits 100% of tool calls in the content channel, requiring #84 to rescue them) **benefit from low temperature.** Low temp produces cleaner, more reliably parseable tool-call JSON. The specific failure mode that doomed eval-30c at default temp — an 18,689-character prose blob too large for the rescue parser — didn't recur. The rescue itself stays load-bearing; what changed is what it has to parse.
+- **Native-tool-call models** (qwen3-coder + qwen3.6 both emit tool calls via the proper `tool_calls` field, zero prose rescues at either temperature) **regress at low temperature.** The randomness in default temperature is what *breaks out of* deterministic loops — iterate-and-refine on the same file (qwen3-coder eval-32b: 21 `create_or_update_file` calls for a 4-file issue), self-referential re-reading (qwen3.6 eval-33: 4 consecutive `get_file_contents` on the same path), verbose summary-instead-of-progress (qwen3.6 eval-33b's 7437-token gen turn). At low temp the model deterministically locks into these patterns instead of exploring out of them.
+
+The intuition "lower temperature = more deterministic = better structured output" turns out to be only half right: it's only true when the *output* is the failure mode. When the failure mode is *behavioral loop avoidance*, low temp makes things worse.
+
+### Recommendation
+
+**Keep the uniform default temperature.** Do not ship per-candidate temperature overrides. The data doesn't support a single low-temp default (regresses qwen3.6 and qwen3-coder) and per-candidate routing logic adds operational complexity for a marginal win on one candidate.
+
+For future onboarding of new candidates, a one-line heuristic: if a candidate emits tool calls through the prose channel (requires #84 to rescue), try `temperature=0.2` early. If it emits native `tool_calls`, leave temperature at default and look for other tuning levers.
+
+### Secondary observations from the data
+
+- **Within-batch branch-slug collisions remain the dominant non-model failure mode.** eval-31c, eval-32c, and the discarded contaminated eval-33 all PARTIALed for the same reason — the runner has no logic to mutate the branch slug between same-task runs, so back-to-back runs converge on the same name and the second one hits 422 "PR already exists." Independent of temperature. Worth its own follow-up issue if this kind of multi-run-same-task investigation becomes routine.
+- **eval-33c is qwen3.6's first nudge-free PASS.** Demonstrates the model *can* drive the recipe without a step-aware nudge, but doesn't do so reliably under any tested configuration. Useful data point for any future system-prompt or recipe-shape iteration.
+- **Per-call t/s curves landed for free** thanks to #88 — every eval-3X log carries them, and they confirmed the qwen3.6/qwen3-coder MoE active-params signature (gen rates 195–235 t/s) vs qwen2.5-coder's dense profile (60–64 t/s) without any extra instrumentation.
+
+### Eval crosswalk
+
+- `evals/eval-31/`, `evals/eval-31b/`, `evals/eval-31c/` — qwen2.5-coder at `temperature=0.2`
+- `evals/eval-32/`, `evals/eval-32b/`, `evals/eval-32c/` — qwen3-coder at `temperature=0.2`
+- `evals/eval-33/`, `evals/eval-33b/`, `evals/eval-33c/` — qwen3.6 at `temperature=0.2`
