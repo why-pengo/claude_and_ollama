@@ -61,24 +61,25 @@ fi
 #                             dilutes post-mortem signal once the question
 #                             "did this actually fit?" is settled. Bump to
 #                             =2 only if =1 doesn't show what you need.
-# OLLAMA_DEBUG_LOG_REQUESTS=true
-#                           → emits per-/api/chat metric blocks (prompt_eval_count,
-#                             prompt_eval_rate, eval_count, eval_rate) into the
-#                             serve log. OLLAMA_DEBUG=1 alone does NOT enable
-#                             these in 0.30.7 — discovered during the eval-27/28/29
-#                             post-mortem when we found only GIN access-log timings
-#                             (total request latency) and no t/s data. Pair with
-#                             OLLAMA_DEBUG so any future bake-off can compute clean
-#                             per-call eval_rate curves and compare under f16 KV
-#                             vs the eval-26 q8_0 baseline. Remove with OLLAMA_DEBUG
-#                             after #47 closes.
+# What's intentionally NOT here (anymore):
+#   OLLAMA_DEBUG_LOG_REQUESTS=true  — added during the #47 bake-off thinking
+#                                     it would emit per-/api/chat metric blocks
+#                                     (prompt_eval_count, eval_rate) into the
+#                                     serve log. Turned out to be a request-body
+#                                     dump-for-replay feature in 0.30.7, not a
+#                                     metrics emitter. Wrote one JSON file per
+#                                     chat call into /tmp/ollama-request-logs-*/
+#                                     with the request body only (no response,
+#                                     no metrics). Reverted. The per-call metrics
+#                                     ARE available — they're in the /api/chat
+#                                     response body — but extracting them is a
+#                                     runner-side change (see #88).
 
 export OLLAMA_FLASH_ATTENTION=1
 export OLLAMA_HOST=0.0.0.0:11434
 export OLLAMA_KEEP_ALIVE=-1
 export OLLAMA_NUM_PARALLEL=1
 export OLLAMA_DEBUG=1
-export OLLAMA_DEBUG_LOG_REQUESTS=true
 
 echo "Starting ollama serve with:"
 env | grep -E '^OLLAMA_' | sort
