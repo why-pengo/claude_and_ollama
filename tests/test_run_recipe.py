@@ -434,6 +434,24 @@ class TestFormatTurnMetrics:
             == "[metrics: prompt=100 tok @ ? t/s | gen=0 tok @ ? t/s | total=0.0s]"
         )
 
+    def test_legitimate_zero_token_count_renders_as_zero_not_question_mark(self):
+        # A real zero-token turn (count==0, non-zero duration) must render
+        # as "0.0 t/s", not "?" — otherwise it's indistinguishable from a
+        # missing-field turn in the log. Guards against treating count==0
+        # as falsy in _rate.
+        m = {
+            "prompt_eval_count": 100,
+            "prompt_eval_duration": 100_000_000,
+            "eval_count": 0,
+            "eval_duration": 500_000_000,  # non-zero duration, zero tokens
+            "total_duration": 600_000_000,
+            "load_duration": None,
+        }
+        assert (
+            format_turn_metrics(m)
+            == "[metrics: prompt=100 tok @ 1000.0 t/s | gen=0 tok @ 0.0 t/s | total=0.6s]"
+        )
+
 
 class TestFormatSessionMetricsSummary:
     def test_aggregates_by_summing_tokens_and_durations(self):
@@ -463,13 +481,44 @@ class TestFormatSessionMetricsSummary:
             "gen=150 tok @ 50.0 t/s | wall=4.0s]"
         )
 
-    def test_empty_list_returns_no_metrics_line(self):
+    def test_empty_list_still_emits_marker_line(self):
         # An exit path with zero captured metrics (mocked backend, or an
         # Ollama version that doesn't populate them) still gets a summary
         # line — the marker is useful when grepping logs for run boundaries.
         assert (
             format_session_metrics_summary([])
             == "[session metrics: turns=0 (no per-call metrics captured)]"
+        )
+
+    def test_unpaired_count_and_duration_across_turns_dont_cross_contaminate(self):
+        # If turn A has count without duration, and turn B has duration
+        # without count, the naive per-key sum would combine the orphan
+        # count with the orphan duration and produce a nonsense rate.
+        # paired_sum must require both halves on the *same turn*.
+        turns = [
+            {
+                # Turn A: count present, duration missing → not counted.
+                "prompt_eval_count": 999,
+                "prompt_eval_duration": None,
+                "eval_count": None,
+                "eval_duration": None,
+                "total_duration": None,
+                "load_duration": None,
+            },
+            {
+                # Turn B: duration present, count missing → not counted.
+                "prompt_eval_count": None,
+                "prompt_eval_duration": 50_000_000,
+                "eval_count": None,
+                "eval_duration": None,
+                "total_duration": None,
+                "load_duration": None,
+            },
+        ]
+        # Both halves of the prompt pair were excluded → 0 / 0 → "?", not
+        # the bogus 999 / 0.05s = 19980 t/s a naive sum would produce.
+        assert format_session_metrics_summary(turns) == (
+            "[session metrics: turns=2 | prompt=0 tok @ ? t/s | " "gen=0 tok @ ? t/s | wall=0.0s]"
         )
 
     def test_partial_per_turn_fields_dont_crash(self):

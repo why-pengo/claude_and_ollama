@@ -562,7 +562,10 @@ def extract_turn_metrics(resp: dict) -> dict | None:
 
 
 def _rate(count, duration_ns) -> str:
-    if not count or not duration_ns:
+    # None → missing field; duration==0 → can't divide. count==0 is a
+    # legitimate zero-token turn — render as "0.0", not "?", so a real
+    # zero stays distinguishable from a missing field in the log.
+    if count is None or duration_ns is None or duration_ns == 0:
         return "?"
     return f"{count / (duration_ns / 1e9):.1f}"
 
@@ -591,14 +594,23 @@ def format_session_metrics_summary(turn_metrics: list[dict]) -> str:
     if not turn_metrics:
         return "[session metrics: turns=0 (no per-call metrics captured)]"
 
-    def s(key):
-        return sum(m[key] for m in turn_metrics if m.get(key) is not None)
+    def paired_sum(count_key: str, dur_key: str) -> tuple[int, int]:
+        # Pair count+duration *within a turn* before summing — otherwise
+        # tokens from a turn missing its duration could combine with the
+        # duration from a different turn, producing a nonsense rate.
+        # Ollama always emits the pair together; this just makes the code
+        # robust to a backend that doesn't.
+        c, d = 0, 0
+        for m in turn_metrics:
+            ck, dk = m.get(count_key), m.get(dur_key)
+            if ck is not None and dk is not None:
+                c += ck
+                d += dk
+        return c, d
 
-    pe = s("prompt_eval_count")
-    pd = s("prompt_eval_duration")
-    ec = s("eval_count")
-    ed = s("eval_duration")
-    td = s("total_duration")
+    pe, pd = paired_sum("prompt_eval_count", "prompt_eval_duration")
+    ec, ed = paired_sum("eval_count", "eval_duration")
+    td = sum(m["total_duration"] for m in turn_metrics if m.get("total_duration") is not None)
     return (
         f"[session metrics: turns={len(turn_metrics)} | "
         f"prompt={pe} tok @ {_rate(pe, pd)} t/s | "
