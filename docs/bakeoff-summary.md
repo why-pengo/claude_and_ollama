@@ -134,7 +134,7 @@ Conditions under which this should be re-evaluated:
 
 ## Caveats and follow-ups
 
-- **No per-call throughput (t/s) curves under f16 KV.** Ollama 0.30.7's `OLLAMA_DEBUG=1` doesn't surface per-call `eval_rate` in the server log, and `OLLAMA_DEBUG_LOG_REQUESTS=true` was the wrong tool (request-body dump, not metrics). The actual fields exist in the `/api/chat` response body but the runner doesn't extract them. **See #88.**
+- **No per-call throughput (t/s) curves for the original bake-off runs (eval-27/28/30).** Those runs predate #88 — Ollama 0.30.7's `OLLAMA_DEBUG=1` doesn't surface per-call `eval_rate` in the server log, and `OLLAMA_DEBUG_LOG_REQUESTS=true` was the wrong tool (request-body dump, not metrics). Resolved going forward by PR #94 (closes #88): the runner now extracts `prompt_eval_count/duration`, `eval_count/duration`, `total_duration` from the `/api/chat` response body and surfaces them in every session.log. The #89 temperature reruns (eval-31..33c, see Appendix A) all carry per-call metrics; the original bake-off scoreline does not.
 - **No code-quality review of the produced PRs.** Reliability is one axis of "which model is best"; correctness is the other. **See #47 subtask 5.**
 - **All runs at default temperature (0.8).** Tested under #89; see Appendix A below. Net finding: low temperature is *not* a uniform tightening lever — it helps the prose-channel candidate (qwen2.5-coder) but hurts the native-tool-call candidates (qwen3-coder, qwen3.6). Default temperature stays uniform.
 - **One task.** The bake-off ran against a single canonical issue. Different issue shapes (frontend-heavy, refactors, multi-file Python services other than the hydration shape) might reorder the candidates. Not surveyed; out of scope for this round.
