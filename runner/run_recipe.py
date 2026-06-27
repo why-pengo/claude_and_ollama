@@ -1341,7 +1341,6 @@ def main() -> int:
     ok, msg = check_gh_auth()
     if not ok:
         print(msg, file=sys.stderr)
-        print("Run 'gh auth login' to authenticate.", file=sys.stderr)
         return 2
 
     # 0 or negative would make the guard trip on every no-progress turn

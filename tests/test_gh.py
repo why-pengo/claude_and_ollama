@@ -32,6 +32,7 @@ class TestCheckGhAuth:
         ok, msg = check_gh_auth()
         assert ok is False
         assert "not logged" in msg
+        assert "gh auth login" in msg
 
     def test_returns_failure_when_gh_binary_missing(self, monkeypatch):
         def boom(*args, **kwargs):
@@ -41,6 +42,8 @@ class TestCheckGhAuth:
         ok, msg = check_gh_auth()
         assert ok is False
         assert "not found" in msg.lower()
+        assert "cli.github.com" in msg
+        assert "gh auth login" not in msg
 
     def test_returns_failure_on_timeout(self, monkeypatch):
         def boom(*args, **kwargs):
@@ -51,3 +54,5 @@ class TestCheckGhAuth:
         assert ok is False
         assert "timed out" in msg
         assert "5s" in msg
+        assert "connectivity" in msg
+        assert "gh auth login" not in msg

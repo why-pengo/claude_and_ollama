@@ -27,10 +27,13 @@ def _gh(
 def check_gh_auth(timeout: int = AUTH_CHECK_TIMEOUT) -> tuple[bool, str]:
     """Verify the gh CLI can talk to GitHub via `gh auth status`.
 
-    Returns (True, "") on success, (False, message) on any failure: non-zero
-    exit (stale/revoked token, no auth at all), missing `gh` binary, or the
-    check itself timing out. The message is whatever gh wrote to stderr,
-    suitable for surfacing verbatim so the user sees gh's own diagnosis.
+    Returns (True, "") on success, (False, message) on any failure. The
+    message includes a hint matched to the failure mode so the caller can
+    print it verbatim:
+      - missing `gh` binary → install hint
+      - the check itself timing out → connectivity hint
+      - non-zero exit (stale/revoked token, no auth at all) → gh's own
+        stderr plus `gh auth login` hint
     """
     try:
         proc = subprocess.run(
@@ -40,10 +43,13 @@ def check_gh_auth(timeout: int = AUTH_CHECK_TIMEOUT) -> tuple[bool, str]:
             timeout=timeout,
         )
     except FileNotFoundError:
-        return False, "gh CLI not found on PATH"
+        return False, "gh CLI not found on PATH. Install it from https://cli.github.com/"
     except subprocess.TimeoutExpired:
-        return False, f"gh auth status timed out after {timeout}s"
+        return False, (
+            f"gh auth status timed out after {timeout}s. "
+            "Check network connectivity to github.com."
+        )
     if proc.returncode == 0:
         return True, ""
-    msg = (proc.stderr or proc.stdout or "").strip()
-    return False, msg or f"gh auth status exited {proc.returncode}"
+    msg = (proc.stderr or proc.stdout or "").strip() or f"gh auth status exited {proc.returncode}"
+    return False, f"{msg}\nRun 'gh auth login' to authenticate."
