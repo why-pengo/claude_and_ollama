@@ -4,6 +4,16 @@ description: |
   (see prompts/issue-format.md), execute its subtask checklist,
   comment with results, and open a PR if files were changed.
 
+# Per-request Ollama options. CLI `--ollama-option KEY=VALUE` overrides these.
+# `temperature: 0.2` ships as a recipe default per ADR-0008 — the runner's
+# new default model (qwen2.5-coder:32b) is a prose-channel model and tightens
+# materially at low temperature (see docs/bakeoff-summary.md Appendix A +
+# evals/eval-35/rollup.md). Override at the call site with
+# `--ollama-option temperature=<value>` when running a different model
+# whose tool-call discipline regresses at low temperature.
+options:
+  temperature: 0.2
+
 parameters:
   - key: issue_number
     input_type: string
