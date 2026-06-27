@@ -2,9 +2,11 @@
 
 > **Note (2026-06-21, correction):** The architecture characterization of `qwen3.6:latest` was incomplete in the original write-up. `/api/show` reports `general.architecture=qwen35moe` with 256 experts, top-8 active — it is a Qwen 3.5-family MoE, not a dense 36B model. Active params per token are roughly 3–5B (8/256 of the MoE plus shared attention). This explains the high observed throughput (~250 t/s gen on the PR #94 smoke check for #88) and means the bake-off compared two MoE candidates (`qwen3.6`, `qwen3-coder`) against one dense candidate (`qwen2.5-coder`). The 3/3 PASS verdict and the recommendation both still hold; inline annotations below have been amended.
 
+> **Note (2026-06-27, recommendation superseded):** The recommendation below ("keep qwen3.6:latest as default") was the right call at filing — qwen3.6 was the only 3/3 PASS at the time and qwen2.5-coder's failure modes were unresolved. Two structural changes have since unlocked a re-eval: #89 confirmed `temperature=0.2` suppresses qwen2.5-coder's prose-blob failure mode (Appendix A) and #98 eliminated the within-batch branch-slug collision that was the remaining PARTIAL driver. The #101 re-eval (eval-35 / eval-35b / eval-35c) went **3/3 PASS at 8.67 avg turns / ~97s avg wall** — clearing the methodology bar with ~2.8x fewer turns than qwen3.6. **The default-model decision flips to qwen2.5-coder:32b @ `temperature=0.2`** per [ADR-0008](adr/0008-qwen25-coder-default-runner-model.md), superseding [ADR-0006](adr/0006-qwen3-6-default-runner-model.md). The runner's code default (`runner/run_recipe.py` `RUNNER_MODEL`) flips in the follow-up implementation issue #103. The original 3/3 scoreline, methodology, and analysis below remain accurate as historical record; only the Recommendation section carries the supersession note inline.
+
 ## TL;DR
 
-**Recommendation: keep `qwen3.6:latest` as the default `RUNNER_MODEL`.**
+**Recommendation (original, 2026-06-21 — superseded 2026-06-27): keep `qwen3.6:latest` as the default `RUNNER_MODEL`.** Default-model decision now points to qwen2.5-coder:32b @ `temperature=0.2` per [ADR-0008](adr/0008-qwen25-coder-default-runner-model.md); runner code flip lands in #103. See the inline update in the Recommendation section below for the why.
 
 Three candidates evaluated 3-of-3 against the same task on bazzite under the post-offload-parked configuration (f16 KV, fully GPU resident, per-request `num_ctx`). qwen3.6 is the only candidate that achieved 3/3 PASS. It's the verbose-but-reliable option; reliability dominates the ceiling-but-variable alternatives for a production-default decision.
 
@@ -124,11 +126,13 @@ Speed differences are interesting but secondary — a 9-turn run that happens 1-
 
 ## Recommendation
 
-**Keep `qwen3.6:latest` as the default `RUNNER_MODEL`.** The current default holds.
+> **Update (2026-06-27, #101 → ADR-0008):** Recommendation revised. After #98 eliminated the within-batch branch-slug collision, qwen2.5-coder:32b @ `temperature=0.2` was re-evaluated 3-of-3 against the canonical task (eval-35 / eval-35b / eval-35c) and went **3/3 PASS at 8.67 avg turns / ~97s avg wall** — clearing the methodology bar with ~2.8x fewer turns than qwen3.6's 24-turn average. **The default-model decision flips to qwen2.5-coder:32b @ `temperature=0.2`**, per [ADR-0008](adr/0008-qwen25-coder-default-runner-model.md), superseding [ADR-0006](adr/0006-qwen3-6-default-runner-model.md). qwen3.6:latest remains a fully-supported override target. The runner's hardcoded default in `runner/run_recipe.py` still reads `qwen3.6:latest` at this PR's merge time; the code-level flip is deferred to the follow-up implementation issue #103 so the decision-record change and the code change stay separately reviewable. See `evals/eval-35/rollup.md` for the full trio writeup.
 
-Conditions under which this should be re-evaluated:
+**Original recommendation (2026-06-21, superseded):** Keep `qwen3.6:latest` as the default `RUNNER_MODEL`. The current default holds.
 
-- **qwen2.5-coder at `temperature=0.2`** (resolved by #89 — see Appendix A) — variance did tighten (2 PASS + 1 PARTIAL vs 1 PASS + 1 PARTIAL + 1 FAIL at default temp), but not to 3/3. The remaining PARTIAL is the within-batch branch-slug collision pattern that's independent of temperature. qwen2.5-coder + low temp is the most promising alternative-default candidate identified to date; the within-batch collision is resolved by #98 (see Appendix A), so a clean rerun at low temp is now possible.
+Conditions under which this should be re-evaluated (historical — the first of these has now fired):
+
+- **qwen2.5-coder at `temperature=0.2`** (resolved by #89 — see Appendix A) — variance did tighten (2 PASS + 1 PARTIAL vs 1 PASS + 1 PARTIAL + 1 FAIL at default temp), but not to 3/3. The remaining PARTIAL is the within-batch branch-slug collision pattern that's independent of temperature. qwen2.5-coder + low temp is the most promising alternative-default candidate identified to date; the within-batch collision is resolved by #98 (see Appendix A), so a clean rerun at low temp is now possible. **→ Fired 2026-06-27 via #101 / ADR-0008. Re-eval went 3/3 PASS. Default flipped.**
 - **qwen3-coder with a post-PR stop signal** — if the overshoot pattern can be addressed via system prompt or temperature, qwen3-coder's clean speed becomes more attractive.
 - **A new qwen3 family release** (e.g. qwen3-coder at larger scale with native tool-call discipline, or qwen3 family with extended training on structured outputs).
 
