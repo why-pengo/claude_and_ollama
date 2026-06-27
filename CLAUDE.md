@@ -157,6 +157,20 @@ Use `scripts/new-eval.sh <N>` to scaffold the directory.
 
 ---
 
+## Architecture decisions
+
+Significant architectural decisions live in `docs/adr/` as numbered
+Markdown ADRs. The index at `docs/adr/README.md` lists them by number,
+title, and status. Reach for the template (`docs/adr/0000-template.md`)
+when a decision lands that a future maintainer would reasonably wonder
+about — load-bearing choices, hard-to-reverse moves, anything that
+shapes future work. Land new ADRs in their own PR or alongside the
+work they describe. ADRs are immutable once Accepted: if a decision
+changes, write a new ADR that supersedes the old one rather than
+editing in place.
+
+---
+
 ## Tests & dev workflow
 
 Runner tests live in `tests/` (top-level), driven by pytest. Config in
