@@ -6,6 +6,7 @@ recipe loading with defaults, and session-message extractors.
 """
 
 import textwrap
+from datetime import datetime
 
 import httpx
 import pytest
@@ -22,6 +23,7 @@ from run_recipe import (
     extract_turn_metrics,
     format_session_metrics_summary,
     format_turn_metrics,
+    generate_branch_name,
     load_recipe,
     ollama_chat,
     parse_prose_tool_call,
@@ -570,6 +572,31 @@ class TestCoerceOptionValue:
 
 
 # ---------------------------------------------------------------------------
+# generate_branch_name — runner-owned working-branch slug (#97, #98)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateBranchName:
+    def test_shape_with_injected_time(self):
+        # Inject a fixed datetime so the test isn't time-dependent.
+        fixed = datetime(2026, 6, 27, 9, 30, 15)
+        assert generate_branch_name("51", now=fixed) == "runner/issue-51-20260627-093015"
+
+    def test_uses_seconds_resolution(self):
+        # The format must include seconds — manual back-to-back invocations
+        # don't fire within the same second, so seconds is enough disambiguation.
+        fixed = datetime(2026, 1, 2, 3, 4, 5)
+        assert generate_branch_name("1", now=fixed).endswith("-20260102-030405")
+
+    def test_default_now_uses_real_clock(self):
+        # No `now=` arg → uses datetime.now(). The shape is enough to assert.
+        name = generate_branch_name("42")
+        assert name.startswith("runner/issue-42-")
+        # `YYYYMMDD-HHMMSS` = 15 chars after the prefix
+        assert len(name) == len("runner/issue-42-") + 15
+
+
+# ---------------------------------------------------------------------------
 # template_recipe — {{ key }} substitution
 # ---------------------------------------------------------------------------
 
@@ -588,6 +615,27 @@ class TestTemplateRecipe:
     def test_raises_key_error_on_missing_key(self):
         with pytest.raises(KeyError, match="repo"):
             template_recipe("PR for {{ repo }}", {"issue_number": "51"})
+
+    def test_substitutes_branch_param(self):
+        # The runner-owned branch name (#98) flows through the same
+        # template_recipe path as every other recipe param.
+        prompt = "Use branch {{ branch }} from {{ base_branch }}."
+        result = template_recipe(
+            prompt,
+            {"branch": "runner/issue-51-20260627-093015", "base_branch": "develop"},
+        )
+        assert result == "Use branch runner/issue-51-20260627-093015 from develop."
+
+    def test_system_prompt_renders_without_branch_param(self):
+        # Regression guard for the PR #99 review finding: the system prompt
+        # is loaded for every recipe (including non-issue ones like
+        # plan-epic.yaml that have no issue_number → no branch param). Any
+        # {{ branch }} reference here would KeyError on those recipes.
+        from run_recipe import SYSTEM_PROMPT_PATH
+
+        # Mirrors the params a non-issue recipe would arrive with — just
+        # base_branch, no issue_number / branch.
+        template_recipe(SYSTEM_PROMPT_PATH.read_text(), {"base_branch": "main"})
 
 
 # ---------------------------------------------------------------------------
@@ -1141,9 +1189,14 @@ class TestRunSessionLoopDetect:
             host="http://example",
             model="m",
             recipe_path=recipe,
-            # The system prompt references {{ base_branch }} / {{ repo }};
-            # pass placeholders so template_recipe doesn't raise.
-            params={"base_branch": "main", "repo": "owner/repo", "issue_number": "1"},
+            # The system prompt references {{ base_branch }} / {{ repo }} /
+            # {{ branch }}; pass placeholders so template_recipe doesn't raise.
+            params={
+                "base_branch": "main",
+                "repo": "owner/repo",
+                "issue_number": "1",
+                "branch": "runner/issue-1-20260627-000000",
+            },
             max_turns=kwargs.get("max_turns", 20),
             salvage_enabled=False,
             loop_detect_threshold=kwargs.get("loop_detect_threshold", 4),
@@ -1260,7 +1313,12 @@ class TestRunSessionProseRescue:
             host="http://example",
             model="m",
             recipe_path=recipe,
-            params={"base_branch": "main", "repo": "owner/repo", "issue_number": "1"},
+            params={
+                "base_branch": "main",
+                "repo": "owner/repo",
+                "issue_number": "1",
+                "branch": "runner/issue-1-20260627-000000",
+            },
             max_turns=kwargs.get("max_turns", 20),
             salvage_enabled=False,
             loop_detect_threshold=kwargs.get("loop_detect_threshold", 4),

@@ -27,6 +27,7 @@ import os
 import re
 import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -617,6 +618,17 @@ def format_session_metrics_summary(turn_metrics: list[dict]) -> str:
         f"gen={ec} tok @ {_rate(ec, ed)} t/s | "
         f"wall={td / 1e9:.1f}s]"
     )
+
+
+def generate_branch_name(issue_number: str, *, now: datetime | None = None) -> str:
+    """Generate the working branch name for a runner session.
+
+    Format: `runner/issue-<N>-<YYYYMMDD-HHMMSS>` (local time, seconds
+    resolution). Runner-owned so back-to-back same-task invocations
+    don't collide on the model's slug choice (see #97, #98).
+    """
+    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    return f"runner/issue-{issue_number}-{stamp}"
 
 
 def template_recipe(prompt: str, params: dict) -> str:
@@ -1331,6 +1343,10 @@ def main() -> int:
         else:
             params["base_branch"] = "main"
             print("(could not resolve default_branch; defaulting base_branch=main)")
+
+    if "branch" not in params and "issue_number" in params:
+        params["branch"] = generate_branch_name(params["issue_number"])
+        print(f"(generated branch={params['branch']})")
 
     cli_options: dict = {}
     if args.num_ctx is not None:
