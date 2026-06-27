@@ -1251,11 +1251,15 @@ def resolve_base_branch(target_repo: str) -> str | None:
     return out.strip() if rc == 0 and out.strip() else None
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser. Extracted from `main` so tests can introspect
+    argparse defaults (e.g. assert the default `--model` matches ADR-0008)
+    without invoking the full `main` entry point.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipe", required=True, type=Path)
     parser.add_argument("--params", action="append", default=[])
-    parser.add_argument("--model", default=os.environ.get("RUNNER_MODEL", "qwen3.6:latest"))
+    parser.add_argument("--model", default=os.environ.get("RUNNER_MODEL", "qwen2.5-coder:32b"))
     parser.add_argument(
         "--ollama-host",
         default=os.environ.get("OLLAMA_HOST", "http://bazzite.local:11434"),
@@ -1307,7 +1311,11 @@ def main() -> int:
         "investigating model behaviour that legitimately involves many identical "
         "repeated calls.",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     if not args.recipe.exists():
         print(f"Recipe not found: {args.recipe}", file=sys.stderr)

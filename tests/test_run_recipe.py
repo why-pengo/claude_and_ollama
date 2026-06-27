@@ -20,6 +20,7 @@ from run_recipe import (
     _extract_branch,
     _extract_issue_title,
     _tool_result_succeeded,
+    build_parser,
     extract_turn_metrics,
     format_session_metrics_summary,
     format_turn_metrics,
@@ -805,6 +806,55 @@ class TestLoadRecipe:
                 """))
         with pytest.raises(TypeError, match="advances_on"):
             load_recipe(recipe, {})
+
+
+# ---------------------------------------------------------------------------
+# build_parser + execute-issue.yaml — runner defaults pinned to ADR-0008
+# ---------------------------------------------------------------------------
+
+
+class TestRunnerDefaults:
+    """Pins the defaults that ADR-0008 declares: model and recipe temperature.
+
+    If these regress, the runner's no-arg invocation has silently drifted off
+    the recommended configuration. The bake-off methodology (3-of-3 against
+    the canonical task) sets the bar for changing them; landing such a change
+    without updating these tests should fail CI and surface the omission.
+    """
+
+    def test_default_model_is_qwen25_coder_per_adr_0008(self, monkeypatch):
+        monkeypatch.delenv("RUNNER_MODEL", raising=False)
+        # build_parser reads RUNNER_MODEL at parser-build time, so the
+        # monkeypatch has to land before this call.
+        parser = build_parser()
+        assert parser.get_default("model") == "qwen2.5-coder:32b"
+
+    def test_runner_model_env_var_still_overrides_default(self, monkeypatch):
+        # The override path is the production escape hatch for picking
+        # qwen3.6:latest (or any other model) without editing the runner.
+        # If this regresses, evals using a non-default model break silently.
+        monkeypatch.setenv("RUNNER_MODEL", "qwen3.6:latest")
+        parser = build_parser()
+        assert parser.get_default("model") == "qwen3.6:latest"
+
+    def test_execute_issue_recipe_ships_temperature_0_2(self):
+        # ADR-0008 says the recipe ships `temperature=0.2` as the default
+        # per-request Ollama option. Anchored at the recipe level rather
+        # than as a runner-wide default so a non-default recipe gets to
+        # pick its own temperature.
+        from pathlib import Path
+
+        recipe_path = Path(run_recipe.__file__).resolve().parent.parent / (
+            "recipes/execute-issue.yaml"
+        )
+        # execute-issue.yaml requires issue_number + repo for template
+        # substitution; provide dummies so load_recipe gets to the
+        # options block we want to inspect.
+        _, _, _, opts = load_recipe(
+            recipe_path,
+            {"issue_number": "0", "repo": "x/y", "base_branch": "main", "branch": "b"},
+        )
+        assert opts.get("temperature") == 0.2
 
 
 # ---------------------------------------------------------------------------
