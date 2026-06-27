@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-Direct-Ollama recipe runner — executor for the claude_and_ollama harness.
+Direct-Ollama recipe runner — CLI shell for the claude_and_ollama harness.
 
-Owns the session loop: calls Ollama directly via the OpenAI-compat endpoint
-and prompts the model to continue when it emits no tool call. Implements
-7 GitHub tools as wrappers around the `gh` CLI.
+This module is the entry point: it parses arguments, resolves
+`base_branch`, generates the working branch name, validates the local
+workspace, and hands off to `session.run_session`. The session loop
+itself lives in `runner/session.py`; the seven `gh`-CLI tool wrappers
+live in `runner/tools.py`. See those modules for execution behaviour.
 
 The runner replaced an earlier Goose-based executor whose session loop
-exited-0 silently on any prose-only turn — that's the reliability ceiling
-the eval-17/eval-19/eval-20 series traced and that this runner removes.
+exited-0 silently on any prose-only turn — that's the reliability
+ceiling the eval-17/eval-19/eval-20 series traced and that this runner
+removes.
 
 Usage:
     python runner/run_recipe.py \\

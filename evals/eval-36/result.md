@@ -15,9 +15,11 @@ confirm the session-log shape matches the pre-split baseline.
 
 ## Verdict
 
-**PASS** — clean `recipe_done` completion: PR + issue comment both fired,
-session ended via the dispatch loop's natural exit (not salvage, not
-loop-detect, not max-turns). Session-log shape matches the eval-35 trio.
+Verdict: PASS
+
+Clean `recipe_done` completion: PR + issue comment both fired, session
+ended via the dispatch loop's natural exit (not salvage, not loop-detect,
+not max-turns). Session-log shape matches the eval-35 trio.
 
 `[session metrics: turns=11 | prompt=78743 tok @ 33619.4 t/s | gen=4297 tok @ 63.7 t/s | wall=73.8s]`
 
