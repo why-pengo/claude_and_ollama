@@ -178,8 +178,9 @@ Runner tests live in `tests/` (top-level), driven by pytest. Config in
 
 Common targets — `make help` for the full list:
 - `make install-dev` — create `runner/.venv` and install deps
-- `make check` — format-check + lint (read-only, safe for CI)
+- `make check` — format-check + lint + typecheck (read-only, safe for CI)
 - `make format` — apply isort + black
+- `make typecheck` — mypy alone (config in `pyproject.toml`'s `[tool.mypy]`)
 - `make test` — run pytest
 - `make test-cov` — run with coverage, HTML report under `htmlcov/`
 - `make ci` — full pipeline: `check` + `test`
