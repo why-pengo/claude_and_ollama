@@ -30,6 +30,7 @@ known_first_party = [
     "recipe",
     "run_recipe",
     "salvage",
+    "session",
     "tools",
     "workspace",
 ]
@@ -58,6 +59,7 @@ module = [
     "test_recipe",
     "test_run_recipe",
     "test_salvage",
+    "test_session",
     "test_tools",
     "test_workspace",
 ]

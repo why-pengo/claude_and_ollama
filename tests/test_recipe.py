@@ -239,7 +239,7 @@ class TestTemplateRecipe:
         # is loaded for every recipe (including non-issue ones like
         # plan-epic.yaml that have no issue_number → no branch param). Any
         # {{ branch }} reference here would KeyError on those recipes.
-        from run_recipe import SYSTEM_PROMPT_PATH
+        from session import SYSTEM_PROMPT_PATH
 
         # Mirrors the params a non-issue recipe would arrive with — just
         # base_branch, no issue_number / branch.
