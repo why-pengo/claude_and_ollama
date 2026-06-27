@@ -9,9 +9,10 @@ runner source.
 The runner's verification gate (epic
 [#111](https://github.com/why-pengo/claude_and_ollama/issues/111)) reads
 verification commands out of the root `AGENTS.md` and runs them after every
-commit. Conventions are surfaced to the executing model as system guidance. A
-target repo with no `AGENTS.md` — or one whose `AGENTS.md` doesn't conform —
-is rejected at session start.
+commit. Conventions reach the executing model through the recipe's existing
+Step 0 fetch of `AGENTS.md` — they are not injected into the system prompt
+by the runner. A target repo with no `AGENTS.md` — or one whose `AGENTS.md`
+doesn't conform — is rejected at session start.
 
 This schema supersedes the soft AGENTS.md handling described in
 `recipes/execute-issue.yaml` Step 0, and replaces the per-task `Q2` axis of
@@ -91,8 +92,9 @@ guidance on what to list.
 
 ### `## Conventions`
 
-A YAML list of strings. Each string is one convention sentence the runner
-surfaces verbatim to the executing model as system guidance.
+A YAML list of strings. Each string is one convention sentence the executing
+model reads verbatim when it fetches `AGENTS.md` during the recipe's Step 0
+(no runner-side system-prompt injection).
 
 ```yaml
 - Use SQLAlchemy 2.0 async style (Mapped[X], mapped_column, AsyncSession, select()).
@@ -125,7 +127,7 @@ The runner bails loudly — never silently — on each of the following:
 | YAML parse error | Reject with the YAML library's error message verbatim. |
 | `## Verification commands` is not a list, or an entry is missing `name`/`command`, or `name` is non-unique within the file | Reject with the offending entry described. |
 | `## Conventions` is not a list of strings | Reject with the offending entry described. |
-| Unknown top-level YAML key inside a required section's block | Reject — guards against typos that would silently drop content. |
+| A `## Verification commands` entry has keys beyond `name` and `command` | Reject with the offending entry described — guards against typos like `cmd:` or `cmnd:` that would silently drop a command. |
 
 The bias is intentional: a malformed `AGENTS.md` is more dangerous than a
 missing one, because the model can fabricate conventions to fill the void.

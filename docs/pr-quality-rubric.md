@@ -1,7 +1,7 @@
 # PR quality rubric — bake-off code review
 
-> **Superseded by `docs/agents-md-schema.md` + runner gate (epic
-> [#111](https://github.com/why-pengo/claude_and_ollama/issues/111)).**
+> **Superseded by `docs/agents-md-schema.md` + runner gate (epic [#111](https://github.com/why-pengo/claude_and_ollama/issues/111)).**
+>
 > The `Q2` "project convention adherence" axis is now enforced in-flow
 > by the runner against the target repo's `AGENTS.md`, not retro-scored
 > per PR. This file is preserved as audit trail for the closed bake-off
