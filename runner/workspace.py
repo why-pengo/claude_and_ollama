@@ -20,15 +20,32 @@ class WorkspaceError(Exception):
 
 
 def _git(args: list[str], cwd: Path, timeout: int = DEFAULT_TIMEOUT) -> tuple[int, str, str]:
-    """Invoke `git` in `cwd` and return (returncode, stdout, stderr)."""
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    """Invoke `git` in `cwd` and return (returncode, stdout, stderr).
+
+    A timeout (`git fetch` against a slow remote, etc.) is surfaced as a
+    non-zero rc plus a synthetic stderr so callers can raise a clean
+    WorkspaceError instead of leaking a TimeoutExpired stack trace. rc=124
+    matches `timeout(1)`'s convention for command-timed-out.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "", f"`git {' '.join(args)}` timed out after {timeout}s"
     return proc.returncode, proc.stdout, proc.stderr
+
+
+# Valid git branch names are far more restrictive than this regex (see
+# `git check-ref-format`), but the runner only needs to defend against the
+# option-injection / whitespace-in-shell-arg cases — branches like `main`,
+# `develop`, `feature/foo`, `release-1.0` all pass. If git itself rejects a
+# name later, that's a clean non-zero rc with git's own error message.
+_SAFE_BRANCH_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]*$")
 
 
 def parse_repo_from_origin_url(url: str) -> str | None:
@@ -52,12 +69,18 @@ def validate_workspace(workspace_dir: Path, target_repo: str, base_branch: str) 
     """Validate the workspace is ready for a session. Raise WorkspaceError if not.
 
     Checks (in order, first failure wins):
-    1. Path exists, is a directory, contains `.git`.
-    2. `origin` URL points at `target_repo`.
-    3. `git status --porcelain` is empty (no modified / staged / untracked).
-    4. Current branch is `base_branch`.
-    5. After `git fetch origin <base_branch>`, `HEAD == origin/<base_branch>`.
+    1. `base_branch` is shell-safe (no leading hyphen, no whitespace).
+    2. Path exists, is a directory, contains `.git`.
+    3. `origin` URL points at `target_repo`.
+    4. `git status --porcelain` is empty (no modified / staged / untracked).
+    5. Current branch is `base_branch`.
+    6. After `git fetch origin <base_branch>`, `HEAD == origin/<base_branch>`.
     """
+    if not _SAFE_BRANCH_RE.fullmatch(base_branch or ""):
+        raise WorkspaceError(
+            f"base_branch {base_branch!r} is unsafe to pass to git — expected only "
+            "alphanumerics, underscore, dot, slash, hyphen (and no leading hyphen)."
+        )
     if not workspace_dir.exists():
         raise WorkspaceError(f"workspace path does not exist: {workspace_dir}")
     if not workspace_dir.is_dir():

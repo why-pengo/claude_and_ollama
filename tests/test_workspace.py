@@ -7,6 +7,7 @@ path whose tail naturally parses to `why-pengo/health_track` (e.g.
 production-shaped owner/repo pair without any URL-rewriting trickery.
 """
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -180,6 +181,38 @@ class TestValidateWorkspaceBailPaths:
         _commit(workspace, "local-side", "local.txt", "local")
         with pytest.raises(WorkspaceError, match="diverged"):
             validate_workspace(workspace, REMOTE_REPO, "main")
+
+    @pytest.mark.parametrize(
+        "unsafe",
+        ["-x", "--help", " main", "main\n", "main with space", "", "main;rm -rf"],
+    )
+    def test_bails_on_unsafe_base_branch(self, tmp_path, unsafe):
+        # base_branch is user-controllable via --params; if it starts with `-`
+        # or carries whitespace, git could interpret it as an option in later
+        # subprocess calls. Bail at the gate instead.
+        workspace, _ = _seed_workspace(tmp_path)
+        with pytest.raises(WorkspaceError, match="unsafe to pass to git"):
+            validate_workspace(workspace, REMOTE_REPO, unsafe)
+
+
+# ---------------------------------------------------------------------------
+# _git — subprocess wrapper behavior
+# ---------------------------------------------------------------------------
+
+
+class TestGitWrapper:
+    def test_timeout_returns_synthetic_failure_instead_of_raising(self, tmp_path, monkeypatch):
+        # `git fetch` against a slow remote could legitimately hit the
+        # default timeout. Surfacing it as a TimeoutExpired stack trace
+        # bypasses the WorkspaceError contract; return rc=124 + stderr instead.
+        def boom(*a, **kw):
+            raise subprocess.TimeoutExpired(cmd=a[0], timeout=kw.get("timeout", 60))
+
+        monkeypatch.setattr(subprocess, "run", boom)
+        rc, out, err = _git(["fetch", "origin", "main"], tmp_path, timeout=1)
+        assert rc == 124
+        assert out == ""
+        assert "timed out after 1s" in err
 
 
 # ---------------------------------------------------------------------------
