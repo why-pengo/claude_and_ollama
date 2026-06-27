@@ -1,6 +1,6 @@
 # ADR-0006: `qwen3.6:latest` is the default `RUNNER_MODEL`
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0008](0008-qwen25-coder-default-runner-model.md)
 - **Date:** 2026-06-21
 
 ## Context
