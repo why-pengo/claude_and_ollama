@@ -1,5 +1,12 @@
 # PR quality rubric — bake-off code review
 
+> **Superseded by `docs/agents-md-schema.md` + runner gate (epic [#111](https://github.com/why-pengo/claude_and_ollama/issues/111)).**
+>
+> The `Q2` "project convention adherence" axis is now enforced in-flow
+> by the runner against the target repo's `AGENTS.md`, not retro-scored
+> per PR. This file is preserved as audit trail for the closed bake-off
+> documented in `docs/bakeoff-summary.md`.
+
 Methodology for evaluating runner-produced PRs against a canonical bake-off issue. Adapts Szych & Schwerk's multi-source approach (arXiv 2605.09059 — benchmark + automated checks + structured human review) to a per-PR scorecard usable in this project's single-developer reality.
 
 > **Single-reviewer caveat (read this first).** This rubric is applied by one developer (the same person who set up the bake-off runs). That's a real limit on what the scoring can claim. The paper's developer-panel methodology averages out individual reviewer bias; ours can't. We compensate with mitigations described under each dimension, but the methodology here is **best-effort given solo constraints, not gold-standard**. Treat the quality dimensions — especially Q3 — as one signal among several, not the deciding signal.
