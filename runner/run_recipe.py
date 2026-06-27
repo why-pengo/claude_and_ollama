@@ -35,6 +35,7 @@ import yaml
 
 from gh import _gh
 from salvage import format_salvage_status, salvage_comment, salvage_pr
+from workspace import WorkspaceError, restore_workspace, validate_workspace
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SYSTEM_PROMPT_PATH = REPO_ROOT / "prompts" / "system-prompt.md"
@@ -1048,6 +1049,7 @@ def run_session(
     cli_options: dict | None = None,
     turn_timeout: float = 600.0,
     loop_detect_threshold: int | None = 4,
+    workspace_dir: Path | None = None,
 ) -> int:
     recipe_prompt, recipe_title, recipe_steps, recipe_options = load_recipe(recipe_path, params)
     # load_recipe filled in YAML-declared defaults; now safe to template the
@@ -1065,6 +1067,8 @@ def run_session(
     print("Runner:         direct-ollama POC")
     print(f"Repo:           {REPO_ROOT}")
     print(f"Ollama:         {host}")
+    if workspace_dir is not None:
+        print(f"Workspace:      {workspace_dir}")
     print(f"Recipe:         {recipe_path}  ({recipe_title})")
     print(f"Model:          {model}")
     print(f"Params:         {params}")
@@ -1261,6 +1265,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--params", action="append", default=[])
     parser.add_argument("--model", default=os.environ.get("RUNNER_MODEL", "qwen2.5-coder:32b"))
     parser.add_argument(
+        "--workspace-dir",
+        type=Path,
+        default=(
+            Path(os.environ["RUNNER_WORKSPACE_DIR"])
+            if os.environ.get("RUNNER_WORKSPACE_DIR")
+            else None
+        ),
+        help="Local checkout of the target repo. Validated before the session runs "
+        "(must exist, match `--params repo=...`, be clean, and be at the tip of "
+        "the resolved base_branch). Falls back to $RUNNER_WORKSPACE_DIR.",
+    )
+    parser.add_argument(
         "--ollama-host",
         default=os.environ.get("OLLAMA_HOST", "http://bazzite.local:11434"),
     )
@@ -1366,17 +1382,41 @@ def main() -> int:
         k, v = opt.split("=", 1)
         cli_options[k] = _coerce_option_value(v)
 
-    return run_session(
-        host=args.ollama_host,
-        model=args.model,
-        recipe_path=args.recipe,
-        params=params,
-        max_turns=args.max_turns,
-        salvage_enabled=not args.no_salvage,
-        cli_options=cli_options,
-        turn_timeout=args.turn_timeout,
-        loop_detect_threshold=None if args.no_loop_detect else args.loop_detect_threshold,
-    )
+    if args.workspace_dir is None:
+        print(
+            "--workspace-dir / RUNNER_WORKSPACE_DIR not set; runner needs a local "
+            "checkout of the target repo to validate against.",
+            file=sys.stderr,
+        )
+        return 2
+    if "repo" not in params:
+        print(
+            "--params repo=<owner>/<name> is required when --workspace-dir is set "
+            "(pre-flight matches the workspace's origin against this value).",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        validate_workspace(args.workspace_dir, params["repo"], params["base_branch"])
+    except WorkspaceError as e:
+        print(f"Workspace pre-flight failed: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        return run_session(
+            host=args.ollama_host,
+            model=args.model,
+            recipe_path=args.recipe,
+            params=params,
+            max_turns=args.max_turns,
+            salvage_enabled=not args.no_salvage,
+            cli_options=cli_options,
+            turn_timeout=args.turn_timeout,
+            loop_detect_threshold=None if args.no_loop_detect else args.loop_detect_threshold,
+            workspace_dir=args.workspace_dir,
+        )
+    finally:
+        restore_workspace(args.workspace_dir, params["base_branch"])
 
 
 if __name__ == "__main__":
