@@ -626,6 +626,17 @@ class TestTemplateRecipe:
         )
         assert result == "Use branch runner/issue-51-20260627-093015 from develop."
 
+    def test_system_prompt_renders_without_branch_param(self):
+        # Regression guard for the PR #99 review finding: the system prompt
+        # is loaded for every recipe (including non-issue ones like
+        # plan-epic.yaml that have no issue_number → no branch param). Any
+        # {{ branch }} reference here would KeyError on those recipes.
+        from run_recipe import SYSTEM_PROMPT_PATH
+
+        # Mirrors the params a non-issue recipe would arrive with — just
+        # base_branch, no issue_number / branch.
+        template_recipe(SYSTEM_PROMPT_PATH.read_text(), {"base_branch": "main"})
+
 
 # ---------------------------------------------------------------------------
 # load_recipe — honors YAML-declared parameter defaults
