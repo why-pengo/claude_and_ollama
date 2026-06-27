@@ -28,6 +28,7 @@ import os
 import re
 import sys
 from collections import Counter
+from collections.abc import Container
 from datetime import datetime
 from pathlib import Path
 
@@ -564,7 +565,7 @@ def extract_turn_metrics(resp: dict) -> dict | None:
     return extracted
 
 
-def _rate(count, duration_ns) -> str:
+def _rate(count: int | None, duration_ns: int | None) -> str:
     # None → missing field; duration==0 → can't divide. count==0 is a
     # legitimate zero-token turn — render as "0.0", not "?", so a real
     # zero stays distinguishable from a missing field in the log.
@@ -636,7 +637,7 @@ def generate_branch_name(issue_number: str, *, now: datetime | None = None) -> s
 def template_recipe(prompt: str, params: dict) -> str:
     """Replace {{ key }} placeholders with parameter values."""
 
-    def sub(m):
+    def sub(m: re.Match[str]) -> str:
         key = m.group(1).strip()
         if key not in params:
             raise KeyError(
@@ -647,7 +648,7 @@ def template_recipe(prompt: str, params: dict) -> str:
     return re.sub(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}", sub, prompt)
 
 
-def _as_str_list(value, *, field: str, step_id: str) -> list:
+def _as_str_list(value: object, *, field: str, step_id: str) -> list[str]:
     """Normalize a YAML scalar-or-list into list[str].
 
     YAML lets a single-element list be written as a bare scalar
@@ -751,7 +752,7 @@ GENERIC_CONTINUE_PROMPT = (
 )
 
 
-def parse_prose_tool_call(content: str, dispatch_keys) -> tuple[str, dict] | None:
+def parse_prose_tool_call(content: str, dispatch_keys: Container[str]) -> tuple[str, dict] | None:
     """Try to recover a structured tool call from prose-channel content.
 
     Returns (fn_name, fn_args) on hit, None on miss.
@@ -1230,7 +1231,7 @@ def run_session(
 # ---------------------------------------------------------------------------
 
 
-def _coerce_option_value(raw: str):
+def _coerce_option_value(raw: str) -> bool | int | float | str:
     """Best-effort coercion for --ollama-option VALUE strings.
 
     Tries bool → int → float → str so callers can write `use_mmap=true`,

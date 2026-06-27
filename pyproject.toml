@@ -25,6 +25,31 @@ skip = [".venv", "runner/.venv", "build", "dist"]
 # third-party (httpx, yaml, pytest) and our own imports (gh, salvage, run_recipe).
 known_first_party = ["gh", "salvage", "run_recipe", "workspace"]
 
+[tool.mypy]
+python_version = "3.12"
+files = ["runner", "tests"]
+exclude = [
+    '^runner/\.venv/',
+    '^htmlcov/',
+    '^build/',
+    '^dist/',
+]
+disallow_untyped_defs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# Tests use monkeypatching with deliberately mis-shaped fake fns and don't
+# carry domain-meaningful types — `disallow_untyped_defs` on test bodies is
+# high-cost, low-value. The runner code still enforces full annotations.
+module = [
+    "conftest",
+    "test_gh",
+    "test_run_recipe",
+    "test_salvage",
+    "test_workspace",
+]
+disallow_untyped_defs = false
+
 [tool.coverage.run]
 source = ["runner"]
 omit = [

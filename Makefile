@@ -5,7 +5,7 @@
 # Run `make help` to list available targets.
 
 .PHONY: help install-dev \
-        format format-check lint check \
+        format format-check lint typecheck check \
         test test-verbose test-file test-name test-cov \
         ci clean
 
@@ -69,7 +69,13 @@ lint: ## Lint runner/ and tests/ with flake8
 	$(VENV_BIN)/flake8 runner tests
 	@printf "$(GREEN)Lint complete$(NC)\n"
 
-check: format-check lint ## Read-only check: format-check + lint (safe for CI / pre-commit)
+typecheck: ## Static type check with mypy (runner/ and tests/ per pyproject config)
+	$(VENV_CHECK)
+	@printf "$(BLUE)Running mypy...$(NC)\n"
+	$(VENV_BIN)/mypy
+	@printf "$(GREEN)Typecheck complete$(NC)\n"
+
+check: format-check lint typecheck ## Read-only check: format-check + lint + typecheck (safe for CI / pre-commit)
 	@printf "$(GREEN)All checks passed$(NC)\n"
 
 # =============================================================================
