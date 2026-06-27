@@ -16,8 +16,9 @@ Usage:
         --params issue_number=51 \\
         --params repo=why-pengo/health_track
 
-Env required:
-    GITHUB_PERSONAL_ACCESS_TOKEN (used by `gh` CLI)
+Prereq:
+    `gh` CLI authenticated (`gh auth status` clean). Either a keyring
+    login via `gh auth login` or an exported GH_TOKEN/GITHUB_TOKEN works.
 """
 
 import argparse
@@ -33,7 +34,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-from gh import _gh
+from gh import _gh, check_gh_auth
 from salvage import format_salvage_status, salvage_comment, salvage_pr
 from workspace import WorkspaceError, restore_workspace, validate_workspace
 
@@ -1337,8 +1338,9 @@ def main() -> int:
         print(f"Recipe not found: {args.recipe}", file=sys.stderr)
         return 2
 
-    if not os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN"):
-        print("GITHUB_PERSONAL_ACCESS_TOKEN not set", file=sys.stderr)
+    ok, msg = check_gh_auth()
+    if not ok:
+        print(msg, file=sys.stderr)
         return 2
 
     # 0 or negative would make the guard trip on every no-progress turn
