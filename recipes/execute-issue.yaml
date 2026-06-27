@@ -22,6 +22,15 @@ parameters:
       from this; PRs target it. The runner auto-resolves it from the
       target's GitHub default_branch when --params repo=... is set,
       so this only matters as a fallback.
+  - key: branch
+    input_type: string
+    requirement: optional
+    description: |
+      Working branch the runner uses for this session. The runner
+      generates this as `runner/issue-<N>-<YYYYMMDD-HHMMSS>` when
+      --params issue_number=... is set, so back-to-back same-task
+      invocations don't collide (see #97, #98). Override only when
+      reproducing a specific historical run.
 
 # Step graph the runner uses to derive its next-step nudge when the model
 # emits a prose-only turn. Walked in order: first step whose requires_prior
@@ -41,8 +50,8 @@ steps:
     requires_prior: [read_issue]
     nudge: |
       Issue read. Continue with Step 2 — create the branch. Your NEXT
-      TOOL CALL must be `github__create_branch` with name
-      `runner/issue-{{ issue_number }}-<slug>` from the integration branch.
+      TOOL CALL must be `github__create_branch` with `branch={{ branch }}`
+      from the integration branch. Use that name exactly.
 
   - id: write
     advances_on: [github__push_files, github__create_or_update_file]
@@ -107,9 +116,10 @@ prompt: |
   missing pieces. Don't guess scope.
 
   # Step 2 — Branch
-  Call `github__create_branch` with name
-  `runner/issue-{{ issue_number }}-<slug>` from `{{ base_branch }}`.
-  Slug is 3–5 kebab-case words from the issue title.
+  Call `github__create_branch` with `branch={{ branch }}` from
+  `{{ base_branch }}`. Use that name exactly — the runner generated
+  it so back-to-back same-task invocations don't collide. Do not
+  invent a slug.
 
   # Step 3 — Execute subtasks in order
 

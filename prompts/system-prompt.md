@@ -37,9 +37,11 @@ but only after attempting the tool, not in lieu of it.
 
 - **Never `git clone`.** Work happens through the `github__*` tools;
   there is no local clone.
-- **Never push to the integration branch directly.** Branches go
-  `runner/issue-<N>-<slug>` from `{{ base_branch }}`; PRs target it.
-  Use `create_branch` for the working branch, not `git checkout -b`.
+- **Never push to the integration branch directly.** The working
+  branch is `{{ branch }}` (runner-generated); create it from
+  `{{ base_branch }}` with `create_branch` and target `{{ base_branch }}`
+  with the PR. Use that name exactly — don't invent a slug. No
+  `git checkout -b`.
 - **Never `--force` anything. Never skip hooks (no `--no-verify`).**
 - **Don't close issues directly.** The PR's `Closes #N` does that on
   merge.
@@ -57,7 +59,8 @@ labels) use `github__*` tools.
 
 - **Files**: `push_files` (multi-file) or `create_or_update_file`
   (single-file).
-- **Branches**: `create_branch` from `{{ base_branch }}`.
+- **Branches**: `create_branch` with `branch={{ branch }}` from
+  `{{ base_branch }}`.
 - **PRs**: `create_pull_request`. No `gh pr create`.
 
 The tool layer doesn't expose a file-mode parameter, so `push_files`

@@ -128,7 +128,7 @@ Speed differences are interesting but secondary — a 9-turn run that happens 1-
 
 Conditions under which this should be re-evaluated:
 
-- **qwen2.5-coder at `temperature=0.2`** (resolved by #89 — see Appendix A) — variance did tighten (2 PASS + 1 PARTIAL vs 1 PASS + 1 PARTIAL + 1 FAIL at default temp), but not to 3/3. The remaining PARTIAL is the within-batch branch-slug collision pattern that's independent of temperature. qwen2.5-coder + low temp is the most promising alternative-default candidate identified to date, but the within-batch collision needs solving before it could ship.
+- **qwen2.5-coder at `temperature=0.2`** (resolved by #89 — see Appendix A) — variance did tighten (2 PASS + 1 PARTIAL vs 1 PASS + 1 PARTIAL + 1 FAIL at default temp), but not to 3/3. The remaining PARTIAL is the within-batch branch-slug collision pattern that's independent of temperature. qwen2.5-coder + low temp is the most promising alternative-default candidate identified to date; the within-batch collision is resolved by #98 (see Appendix A), so a clean rerun at low temp is now possible.
 - **qwen3-coder with a post-PR stop signal** — if the overshoot pattern can be addressed via system prompt or temperature, qwen3-coder's clean speed becomes more attractive.
 - **A new qwen3 family release** (e.g. qwen3-coder at larger scale with native tool-call discipline, or qwen3 family with extended training on structured outputs).
 
@@ -176,7 +176,7 @@ For future onboarding of new candidates, a one-line heuristic: if a candidate em
 
 ### Secondary observations from the data
 
-- **Within-batch branch-slug collisions remain the dominant non-model failure mode.** eval-31c, eval-32c, and the discarded contaminated eval-33 all PARTIALed for the same reason — the runner has no logic to mutate the branch slug between same-task runs, so back-to-back runs converge on the same name and the second one hits 422 "PR already exists." Independent of temperature. Worth its own follow-up issue if this kind of multi-run-same-task investigation becomes routine.
+- **Within-batch branch-slug collisions remain the dominant non-model failure mode.** eval-31c, eval-32c, and the discarded contaminated eval-33 all PARTIALed for the same reason — the runner has no logic to mutate the branch slug between same-task runs, so back-to-back runs converge on the same name and the second one hits 422 "PR already exists." Independent of temperature. Worth its own follow-up issue if this kind of multi-run-same-task investigation becomes routine. **Resolved by #98** (investigation #97 → GO Approach E): the runner now generates `runner/issue-<N>-<YYYYMMDD-HHMMSS>` and passes it to the model as a templated param, so the model never picks the slug and back-to-back invocations get distinct branches.
 - **eval-33c is qwen3.6's first nudge-free PASS.** Demonstrates the model *can* drive the recipe without a step-aware nudge, but doesn't do so reliably under any tested configuration. Useful data point for any future system-prompt or recipe-shape iteration.
 - **Per-call t/s curves landed for free** thanks to #88 — every eval-3X log carries them, and they confirmed the qwen3.6/qwen3-coder MoE active-params signature (gen rates 195–235 t/s) vs qwen2.5-coder's dense profile (60–64 t/s) without any extra instrumentation.
 
