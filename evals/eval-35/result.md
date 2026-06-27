@@ -25,7 +25,7 @@ Nothing. Clean PASS.
 
 ## Verdict
 
-**Verdict: PASS**
+Verdict: PASS
 
 ## Notes
 

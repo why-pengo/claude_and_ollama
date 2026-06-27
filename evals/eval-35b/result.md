@@ -25,7 +25,7 @@ Run 2 of 3 for #101. Back-to-back after eval-35; model stayed warm; no manual st
 
 ## Verdict
 
-**Verdict: PASS**
+Verdict: PASS
 
 By the bake-off methodology: recipe-complete (PR fired + comment fired), review-able artifact (PR landed without collisions or retry-spam), no loop-detect engagement, no nudge cascade. Artifact-quality review is a separate axis (#47 subtask 5 / explicitly out of scope for #101).
 

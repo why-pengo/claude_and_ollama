@@ -27,24 +27,31 @@ The trade-off accepted: qwen2.5-coder is 100% prose-channel — it cannot run wi
 
 ## Decision
 
-`qwen2.5-coder:32b` at `temperature=0.2` is the default `RUNNER_MODEL` for `runner/run_recipe.py`. The runner ships this candidate by default and the recipe ships `temperature=0.2` as the default per-request Ollama option. Override either via the `RUNNER_MODEL` env var / `--model` flag and `--ollama-option temperature=<value>` respectively for experiments and per-eval comparisons.
+`qwen2.5-coder:32b` at `temperature=0.2` becomes the default `RUNNER_MODEL` for `runner/run_recipe.py`. The runner will ship this candidate as its default and `recipes/execute-issue.yaml` will ship `temperature=0.2` as the default per-request Ollama option. Override paths stay unchanged: `RUNNER_MODEL` env var / `--model` flag for the model and `--ollama-option temperature=<value>` for the temperature.
 
-This decision supersedes [ADR-0006](0006-qwen3-6-default-runner-model.md). qwen3.6:latest is no longer the default; it remains a fully-supported override target.
+This decision supersedes [ADR-0006](0006-qwen3-6-default-runner-model.md). qwen3.6:latest stops being the default and remains a fully-supported override target.
+
+**Implementation staging.** This ADR records the decision; the code change lands in #103 (the follow-up implementation issue filed alongside the ADR's PR). At this ADR's merge time the runner's hardcoded `RUNNER_MODEL` default in `runner/run_recipe.py` still reads `qwen3.6:latest`. The decision-record change and the code change were deliberately split so each is reviewable in isolation. The ADR's status is Accepted because the decision itself is binding — no more debate, evidence is in (eval-35 trio), recommendation is GO — even though the line of code that reflects it lands in a separate PR.
 
 ## Consequences
 
-- Production runner expects qwen2.5-coder's 100% prose-channel shape. #84's prose-shaped tool-call rescue is now load-bearing for the default execution path, not just for an alternative candidate. Any regression to #84 affects default-case reliability immediately.
+Once #103 implements the flip:
+
+- Production runner expects qwen2.5-coder's 100% prose-channel shape. #84's prose-shaped tool-call rescue becomes load-bearing for the default execution path, not just for an alternative candidate. Any regression to #84 affects default-case reliability immediately.
 - Default-case PASS profile changes from "verbose-but-correct, ~24 turns, one nudge per run" to "tight, ~8–10 turns, occasional nudge from the empty-turn guard." Default wall-time-per-task drops from ~250–300s to ~100s.
-- Default temperature is no longer Ollama's 0.8 — the recipe carries `temperature=0.2` as the default Ollama option. Per-candidate temperature overrides via `--ollama-option` continue to work; the runner's no-arg invocation now ships the low-temp setting.
+- Default temperature is no longer Ollama's 0.8 — the recipe carries `temperature=0.2` as the default Ollama option. Per-candidate temperature overrides via `--ollama-option` continue to work; the runner's no-arg invocation ships the low-temp setting.
 - qwen3.6:latest stays a fully-supported override candidate. The bake-off scoreline (3/3 PASS at default temp, 2/3 PASS at low temp per #89 Appendix A) remains the reference data for picking it as an override.
+
+Independent of #103's merge:
+
 - The bake-off methodology — 3-of-3 against the same canonical task, same configuration — stays the bar for default-model changes. This decision is the result of the methodology being applied a second time, against a different config (low temp + #98), and clearing it.
 - Code-quality across candidates is still not assessed by this ADR (see #47 subtask 5). The eval-35 trio's artifacts varied in completeness (2-file, 2-file, 4-file commits across three runs against the same 5-subtask issue). Reliability is one axis; correctness of the produced PRs is the other.
 - The mitigation for the rescue-dependency: #84 has been stable across every eval since landing, has direct test coverage in `tests/`, and the eval cadence catches regressions. If #84 ever needs to ship behind a feature flag, a qwen3.6 fallback recipe is a one-line override.
 
 ## References
 
-- Issue: #101 (this investigation), #47 (the original bake-off), #89 (temperature investigation), #98 (runner-owned branch naming that eliminated the collision blocker)
-- PR: forthcoming (this PR)
+- Issue: #101 (this investigation), #47 (the original bake-off), #89 (temperature investigation), #98 (runner-owned branch naming that eliminated the collision blocker), #103 (follow-up implementation of the default flip)
+- PR: [#102](https://github.com/why-pengo/claude_and_ollama/pull/102) (this ADR + eval-35 trio + bake-off update)
 - Evals: `evals/eval-35/`, `evals/eval-35b/`, `evals/eval-35c/` (the 3-of-3 re-eval), `evals/eval-34/` (#98 shakedown), `evals/eval-31/` series (the #89 temperature data this re-eval was predicted by)
 - Doc: `docs/bakeoff-summary.md` (recommendation section updated alongside this ADR), `evals/eval-35/rollup.md` (full trio writeup)
 - Related: [ADR-0006](0006-qwen3-6-default-runner-model.md) (superseded by this ADR), [ADR-0003](0003-park-cpu-offload-as-production-lane.md) and [ADR-0005](0005-use-f16-kv-cache.md) (the configuration the re-eval ran against), [ADR-0007](0007-loop-detection-and-prose-rescue-are-load-bearing.md) (the rescue this default now depends on)

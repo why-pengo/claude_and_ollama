@@ -25,7 +25,7 @@ Nothing on the runner axis. Recipe-complete by bake-off criteria.
 
 ## Verdict
 
-**Verdict: PASS**
+Verdict: PASS
 
 ## Notes
 
