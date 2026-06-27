@@ -36,4 +36,4 @@ Loop detection (#85) and prose-shaped tool-call rescue (#84) are load-bearing ru
 - PRs: [#86](https://github.com/why-pengo/claude_and_ollama/pull/86) (loop detection), [#87](https://github.com/why-pengo/claude_and_ollama/pull/87) (prose rescue)
 - Evals: `evals/eval-26/` (sampling-collapse motivating #85), `evals/eval-29/` (prose-channel motivating #84), `evals/eval-27/`, `evals/eval-30/` (both mechanisms firing in bake-off runs)
 - Doc: `docs/bakeoff-summary.md` (key findings #2 and #3 reiterate that both are load-bearing)
-- Code: `runner/run_recipe.py` — `parse_prose_tool_call`, `turn_signature`, `run_session` loop-detect block
+- Code: `runner/prose_rescue.py` — `parse_prose_tool_call`, `turn_signature`. `runner/session.py` — `run_session` loop-detect block. (Originally `runner/run_recipe.py` pre-#115's module split.)
