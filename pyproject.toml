@@ -23,7 +23,7 @@ line_length = 100
 skip = [".venv", "runner/.venv", "build", "dist"]
 # Treat runner modules as first-party so isort keeps the blank line between
 # third-party (httpx, yaml, pytest) and our own imports (gh, salvage, run_recipe).
-known_first_party = ["gh", "salvage", "run_recipe"]
+known_first_party = ["gh", "salvage", "run_recipe", "workspace"]
 
 [tool.coverage.run]
 source = ["runner"]
