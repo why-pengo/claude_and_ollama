@@ -10,4 +10,4 @@ black>=24.0
 ruff>=0.15
 mypy>=1.11
 types-PyYAML>=6.0
-pip-audit>=2.7
+pip-audit>=2.10.1
