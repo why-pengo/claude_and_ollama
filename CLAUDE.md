@@ -173,13 +173,15 @@ editing in place.
 
 ## Tests & dev workflow
 
-Runner tests live in `tests/` (top-level), driven by pytest. Config in
-`pyproject.toml` and `.flake8`.
+Runner tests live in `tests/` (top-level), driven by pytest. All tool
+config (pytest, black, ruff, mypy, coverage) lives in `pyproject.toml`.
+Ruff handles lint + import order (replaced flake8 + isort; GO decision
+recorded on #122); black handles formatting.
 
 Common targets — `make help` for the full list:
 - `make install-dev` — create `runner/.venv` and install deps
 - `make check` — format-check + lint + typecheck (read-only, safe for CI)
-- `make format` — apply isort + black
+- `make format` — fix import order (ruff) + apply black
 - `make typecheck` — mypy alone (config in `pyproject.toml`'s `[tool.mypy]`)
 - `make test` — run pytest
 - `make test-cov` — run with coverage, HTML report under `htmlcov/`
