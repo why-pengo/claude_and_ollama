@@ -8,6 +8,7 @@ focused on turn orchestration.
 """
 
 import json
+from urllib.parse import quote
 
 from gh import _gh
 
@@ -178,11 +179,87 @@ def _cap(content: str) -> str:
     return truncated + (f"\n\n... [truncated by runner; full content was {len(encoded)} bytes]")
 
 
+def _q(value: object) -> str:
+    """Percent-encode a single URL path segment or query value (`/` included)."""
+    return quote(str(value), safe="")
+
+
+def _qp(value: object) -> str:
+    """Percent-encode a multi-segment path value (file path, branch name).
+
+    `/` survives as a segment separator; `?`, `#`, spaces, `%` are encoded so
+    a model-supplied value can't terminate the path early or smuggle query
+    parameters into the request. Pair with `_segment_error` — quote() leaves
+    dots alone, so `..` traversal must be rejected separately.
+    """
+    return quote(str(value), safe="/")
+
+
+def _segment_error(value: str, field: str) -> str | None:
+    """Reject path values whose segments could escape the pinned URL prefix.
+
+    api.github.com normalises dot-segments, so a `path` of `../../user/repos`
+    would resolve outside `repos/{owner}/{repo}/contents/` even after
+    percent-encoding (quote() does not touch dots). Empty segments (leading
+    `/`, `//`, trailing `/`) are rejected too — none are meaningful in the
+    GitHub tree/ref namespaces these tools address.
+    """
+    if any(seg in ("", ".", "..") for seg in value.split("/")):
+        return f"ERROR: {field} {value!r} contains empty or dot path segments"
+    return None
+
+
+def _parse_issue_number(args: dict) -> int | None:
+    """`issue_number` as an int, or None if it can't be one.
+
+    The value lands in a URL path, so a string like `"51/comments"` must be
+    refused rather than interpolated.
+    """
+    raw = args.get("issue_number")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def repo_pin_error(args: dict, pinned_repo: str) -> str | None:
+    """Return an ERROR result if `args` doesn't target `pinned_repo`, else None.
+
+    The session loop runs this before dispatching any github__* call. The
+    model's owner/repo arguments are steered by untrusted content (issue
+    bodies, target-repo AGENTS.md, fetched files) while `gh` holds the
+    operator's full token — so a call aimed at any repo other than the
+    session's `--params repo` is refused before a subprocess spawns.
+    Missing or non-string owner/repo fails closed for the same reason.
+    """
+    owner, repo = args.get("owner"), args.get("repo")
+    if not isinstance(owner, str) or not isinstance(repo, str) or not owner or not repo:
+        return (
+            f"ERROR: tool call is missing owner/repo; this session only "
+            f"operates on {pinned_repo}."
+        )
+    if f"{owner}/{repo}".lower() != pinned_repo.lower():
+        return (
+            f"ERROR: tool call targets {owner}/{repo}, but this session is "
+            f"pinned to {pinned_repo}. Repeat the call against {pinned_repo}."
+        )
+    return None
+
+
 def github_issue_read(args: dict) -> str:
+    issue_number = _parse_issue_number(args)
+    if issue_number is None:
+        return f"ERROR: issue_number {args.get('issue_number')!r} is not an integer"
     rc, out, err = _gh(
         [
             "api",
-            f"repos/{args['owner']}/{args['repo']}/issues/{args['issue_number']}",
+            f"repos/{_q(args['owner'])}/{_q(args['repo'])}/issues/{issue_number}",
             "--jq",
             "{number, title, body, state, labels: [.labels[].name]}",
         ]
@@ -191,10 +268,13 @@ def github_issue_read(args: dict) -> str:
 
 
 def github_get_file_contents(args: dict) -> str:
+    path_err = _segment_error(args["path"], "path")
+    if path_err is not None:
+        return path_err
     ref = args.get("ref")
-    path = f"repos/{args['owner']}/{args['repo']}/contents/{args['path']}"
+    path = f"repos/{_q(args['owner'])}/{_q(args['repo'])}/contents/{_qp(args['path'])}"
     if ref:
-        path += f"?ref={ref}"
+        path += f"?ref={_q(ref)}"
     rc, out, err = _gh(["api", path, "--jq", ".content"])
     if rc != 0:
         # Distinguish 404 (file genuinely missing) from real failures so the
@@ -206,18 +286,23 @@ def github_get_file_contents(args: dict) -> str:
     import base64
 
     try:
-        decoded = base64.b64decode(out.strip().replace('"', "")).decode("utf-8")
+        # gh --jq output may carry surrounding quotes depending on gh's
+        # output mode; strip only the ends — never interior characters.
+        decoded = base64.b64decode(out.strip().strip('"')).decode("utf-8")
         return _cap(decoded)
     except Exception as e:
         return f"ERROR decoding content: {e}"
 
 
 def github_create_branch(args: dict) -> str:
+    branch_err = _segment_error(args["from_branch"], "from_branch")
+    if branch_err is not None:
+        return branch_err
     # Get the SHA of the from_branch's HEAD
     rc, out, err = _gh(
         [
             "api",
-            f"repos/{args['owner']}/{args['repo']}/git/refs/heads/{args['from_branch']}",
+            f"repos/{_q(args['owner'])}/{_q(args['repo'])}/git/refs/heads/{_qp(args['from_branch'])}",
             "--jq",
             ".object.sha",
         ]
@@ -237,7 +322,7 @@ def github_create_branch(args: dict) -> str:
             "api",
             "-X",
             "POST",
-            f"repos/{args['owner']}/{args['repo']}/git/refs",
+            f"repos/{_q(args['owner'])}/{_q(args['repo'])}/git/refs",
             "--input",
             "-",
         ],
@@ -251,12 +336,16 @@ def github_create_branch(args: dict) -> str:
 def github_create_or_update_file(args: dict) -> str:
     import base64
 
+    path_err = _segment_error(args["path"], "path")
+    if path_err is not None:
+        return path_err
     content_b64 = base64.b64encode(args["content"].encode("utf-8")).decode("ascii")
+    repo_prefix = f"repos/{_q(args['owner'])}/{_q(args['repo'])}"
     # Check if the file exists to get its SHA (required for updates)
     rc, out, _ = _gh(
         [
             "api",
-            f"repos/{args['owner']}/{args['repo']}/contents/{args['path']}?ref={args['branch']}",
+            f"{repo_prefix}/contents/{_qp(args['path'])}?ref={_q(args['branch'])}",
             "--jq",
             ".sha",
         ]
@@ -267,13 +356,13 @@ def github_create_or_update_file(args: dict) -> str:
         "branch": args["branch"],
     }
     if rc == 0 and out.strip():
-        payload["sha"] = out.strip().replace('"', "")
+        payload["sha"] = out.strip().strip('"')
     rc, out, err = _gh(
         [
             "api",
             "-X",
             "PUT",
-            f"repos/{args['owner']}/{args['repo']}/contents/{args['path']}",
+            f"{repo_prefix}/contents/{_qp(args['path'])}",
             "--input",
             "-",
         ],
@@ -286,7 +375,12 @@ def github_create_or_update_file(args: dict) -> str:
 
 def github_push_files(args: dict) -> str:
     """Multi-file commit. Builds a tree + commit + ref update via git data API."""
-    owner, repo, branch = args["owner"], args["repo"], args["branch"]
+    owner, repo, branch = _q(args["owner"]), _q(args["repo"]), args["branch"]
+
+    branch_err = _segment_error(branch, "branch")
+    if branch_err is not None:
+        return branch_err
+    branch = _qp(branch)
 
     rc, out, err = _gh(
         [
@@ -423,7 +517,7 @@ def github_create_pull_request(args: dict) -> str:
             "api",
             "-X",
             "POST",
-            f"repos/{args['owner']}/{args['repo']}/pulls",
+            f"repos/{_q(args['owner'])}/{_q(args['repo'])}/pulls",
             "--input",
             "-",
             "--jq",
@@ -437,13 +531,16 @@ def github_create_pull_request(args: dict) -> str:
 
 
 def github_add_issue_comment(args: dict) -> str:
+    issue_number = _parse_issue_number(args)
+    if issue_number is None:
+        return f"ERROR: issue_number {args.get('issue_number')!r} is not an integer"
     payload = json.dumps({"body": args["body"]})
     rc, out, err = _gh(
         [
             "api",
             "-X",
             "POST",
-            f"repos/{args['owner']}/{args['repo']}/issues/{args['issue_number']}/comments",
+            f"repos/{_q(args['owner'])}/{_q(args['repo'])}/issues/{issue_number}/comments",
             "--input",
             "-",
             "--jq",

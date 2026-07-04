@@ -149,10 +149,15 @@ def _ok_dispatch():
 
 
 def _tool_call_msg(name: str, args: dict) -> dict:
+    # Repo pinning (#119) refuses calls whose owner/repo don't match the
+    # session's params (repo="owner/repo" in _runs), so fixtures carry a
+    # matching pair by default; pass explicit values to test mismatches.
     return {
         "role": "assistant",
         "content": "",
-        "tool_calls": [{"function": {"name": name, "arguments": args}}],
+        "tool_calls": [
+            {"function": {"name": name, "arguments": {"owner": "owner", "repo": "repo", **args}}}
+        ],
     }
 
 
@@ -322,13 +327,16 @@ class TestRunSessionProseRescue:
         scripted = [
             _prose_msg(
                 '{"name": "github__issue_read", '
-                '"arguments": {"owner": "x", "repo": "y", "issue_number": 1}}'
+                '"arguments": {"owner": "owner", "repo": "repo", "issue_number": 1}}'
             ),
             _prose_msg(
                 '{"name": "github__create_pull_request", '
-                '"arguments": {"head": "h", "base": "b"}}'
+                '"arguments": {"owner": "owner", "repo": "repo", "head": "h", "base": "b"}}'
             ),
-            _prose_msg('{"name": "github__add_issue_comment", ' '"arguments": {"body": "done"}}'),
+            _prose_msg(
+                '{"name": "github__add_issue_comment", '
+                '"arguments": {"owner": "owner", "repo": "repo", "body": "done"}}'
+            ),
         ]
         rc = self._runs(monkeypatch, tmp_path, scripted)
         assert rc == 0  # recipe_done after PR + comment
@@ -340,7 +348,7 @@ class TestRunSessionProseRescue:
             _tool_call_msg("github__issue_read", {"issue_number": 1}),
             _prose_msg(
                 '{"name": "github__create_pull_request", '
-                '"arguments": {"head": "h", "base": "b"}}'
+                '"arguments": {"owner": "owner", "repo": "repo", "head": "h", "base": "b"}}'
             ),
             _tool_call_msg("github__add_issue_comment", {"body": "done"}),
         ]
@@ -359,6 +367,54 @@ class TestRunSessionProseRescue:
         rc = self._runs(monkeypatch, tmp_path, scripted)
         assert rc == 2  # empty_turn_count >= 3
 
+    def test_prose_rescued_call_is_still_repo_pinned(self, monkeypatch, tmp_path):
+        # The rescue path synthesises tool_calls from prose; those must go
+        # through the same repo-pin gate as native tool calls. A rescued
+        # call targeting a foreign repo never reaches its implementation.
+        dispatched = []
+        dispatch = _ok_dispatch()
+        dispatch["github__push_files"] = lambda args: dispatched.append(args) or "OK"
+        monkeypatch.setattr(
+            session,
+            "ollama_chat",
+            _scripted_chat(
+                [
+                    _prose_msg(
+                        '{"name": "github__push_files", '
+                        '"arguments": {"owner": "evil", "repo": "other", "branch": "b", '
+                        '"files": [], "message": "m"}}'
+                    ),
+                    _prose_msg(
+                        '{"name": "github__create_pull_request", '
+                        '"arguments": {"owner": "owner", "repo": "repo", "head": "h", "base": "b"}}'
+                    ),
+                    _prose_msg(
+                        '{"name": "github__add_issue_comment", '
+                        '"arguments": {"owner": "owner", "repo": "repo", "body": "done"}}'
+                    ),
+                ]
+            ),
+        )
+        monkeypatch.setattr(session, "DISPATCH", dispatch)
+        monkeypatch.setattr(session, "attempt_salvage", lambda *a, **kw: None)
+        rc = run_session(
+            host="http://example",
+            model="m",
+            recipe_path=_minimal_recipe(tmp_path),
+            params={
+                "base_branch": "main",
+                "repo": "owner/repo",
+                "issue_number": "1",
+                "branch": "runner/issue-1-20260627-000000",
+            },
+            max_turns=20,
+            salvage_enabled=False,
+            loop_detect_threshold=4,
+            turn_timeout=10.0,
+        )
+        assert rc == 0
+        assert dispatched == []  # pinned-out call never hit the impl
+
     def test_unknown_tool_in_prose_does_not_rescue(self, monkeypatch, tmp_path):
         # Even if the prose looks like a tool call, the rescue refuses
         # unknown tool names rather than dispatching a hallucination.
@@ -369,3 +425,76 @@ class TestRunSessionProseRescue:
         ]
         rc = self._runs(monkeypatch, tmp_path, scripted)
         assert rc == 2  # treated as no-tool-call; empty-turn guard fires
+
+
+# ---------------------------------------------------------------------------
+# run_session — repo pinning at the dispatch seam (#119)
+# ---------------------------------------------------------------------------
+
+
+class TestRunSessionRepoPin:
+    """A tool call targeting a repo other than the session's `--params repo`
+    must produce an ERROR result without the implementation ever running —
+    the pin is enforced in the session loop, upstream of DISPATCH.
+    """
+
+    def _runs(self, monkeypatch, tmp_path, scripted, dispatch):
+        monkeypatch.setattr(session, "ollama_chat", _scripted_chat(scripted))
+        monkeypatch.setattr(session, "DISPATCH", dispatch)
+        monkeypatch.setattr(session, "attempt_salvage", lambda *a, **kw: None)
+        return run_session(
+            host="http://example",
+            model="m",
+            recipe_path=_minimal_recipe(tmp_path),
+            params={
+                "base_branch": "main",
+                "repo": "owner/repo",
+                "issue_number": "1",
+                "branch": "runner/issue-1-20260627-000000",
+            },
+            max_turns=20,
+            salvage_enabled=False,
+            loop_detect_threshold=4,
+            turn_timeout=10.0,
+        )
+
+    def test_mismatched_repo_call_never_reaches_impl(self, monkeypatch, tmp_path):
+        dispatched = []
+        dispatch = _ok_dispatch()
+        dispatch["github__push_files"] = lambda args: dispatched.append(args) or "OK"
+        scripted = [
+            _tool_call_msg(
+                "github__push_files",
+                {"owner": "evil", "repo": "other", "branch": "b", "files": [], "message": "m"},
+            ),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        rc = self._runs(monkeypatch, tmp_path, scripted, dispatch)
+        assert rc == 0  # session still completes via the matching calls
+        assert dispatched == []
+
+    def test_missing_owner_repo_fails_closed(self, monkeypatch, tmp_path):
+        dispatched = []
+        dispatch = _ok_dispatch()
+        dispatch["github__push_files"] = lambda args: dispatched.append(args) or "OK"
+        scripted = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "github__push_files",
+                            # no owner/repo at all — must not slip the pin
+                            "arguments": {"branch": "b", "files": [], "message": "m"},
+                        }
+                    }
+                ],
+            },
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        rc = self._runs(monkeypatch, tmp_path, scripted, dispatch)
+        assert rc == 0
+        assert dispatched == []

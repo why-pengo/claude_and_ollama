@@ -38,7 +38,7 @@ from recipe import (
     template_recipe,
 )
 from salvage import format_salvage_status, salvage_comment, salvage_pr
-from tools import DISPATCH, TOOL_SCHEMAS, log_tool_call
+from tools import DISPATCH, TOOL_SCHEMAS, log_tool_call, repo_pin_error
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SYSTEM_PROMPT_PATH = REPO_ROOT / "prompts" / "system-prompt.md"
@@ -173,6 +173,7 @@ def run_session(
     print("=== Session start ===")
 
     succeeded: set[str] = set()
+    pinned_repo = params.get("repo", "")
     empty_turn_count = 0
     # Per-turn timing metrics extracted from each /api/chat response.
     # Drives the per-turn log line and the end-of-session summary (#88).
@@ -244,13 +245,22 @@ def run_session(
                         fn_name, fn_args if isinstance(fn_args, dict) else {"raw": fn_args}
                     )
                     impl = DISPATCH.get(fn_name)
+                    args_dict = fn_args if isinstance(fn_args, dict) else {}
+                    # Repo pinning (#119): the model's owner/repo args are
+                    # steered by untrusted content, so any call not targeting
+                    # the session's `--params repo` is refused before a gh
+                    # subprocess spawns. main() guarantees `repo` is set;
+                    # an empty pin (direct run_session callers) skips the check.
+                    pin_err = repo_pin_error(args_dict, pinned_repo) if pinned_repo else None
                     if impl is None:
                         result = (
                             f"ERROR: unknown tool {fn_name}. Available: {sorted(DISPATCH.keys())}"
                         )
+                    elif pin_err is not None:
+                        result = pin_err
                     else:
                         try:
-                            result = impl(fn_args if isinstance(fn_args, dict) else {})
+                            result = impl(args_dict)
                         except Exception as e:
                             result = f"ERROR running {fn_name}: {type(e).__name__}: {e}"
                     messages.append(
