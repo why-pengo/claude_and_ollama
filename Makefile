@@ -5,7 +5,7 @@
 # Run `make help` to list available targets.
 
 .PHONY: help install-dev \
-        format format-check lint typecheck check \
+        format format-check lint typecheck check audit \
         test test-verbose test-file test-name test-cov \
         ci clean
 
@@ -77,6 +77,12 @@ typecheck: ## Static type check with mypy (runner/ and tests/ per pyproject conf
 
 check: format-check lint typecheck ## Read-only check: format-check + lint + typecheck (safe for CI / pre-commit)
 	@printf "$(GREEN)All checks passed$(NC)\n"
+
+audit: ## Audit installed dependencies for known CVEs (needs network; CI runs it after make ci)
+	$(VENV_CHECK)
+	@printf "$(BLUE)Running pip-audit...$(NC)\n"
+	$(VENV_BIN)/pip-audit
+	@printf "$(GREEN)No known vulnerabilities$(NC)\n"
 
 # =============================================================================
 # Tests

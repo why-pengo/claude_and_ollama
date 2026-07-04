@@ -30,3 +30,7 @@ jobs:
         run: make install-dev
       - name: Run checks and tests
         run: make ci
+      # Separate step (not folded into make ci) because it queries the PyPI
+      # advisory DB — local `make ci` stays runnable offline.
+      - name: Audit dependencies for known CVEs
+        run: make audit

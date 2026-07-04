@@ -1,0 +1,18 @@
+# Dependabot — weekly update PRs for the two ecosystems in this repo:
+# pip (requirements-dev.txt) and GitHub Actions (SHA-pinned in
+# .github/workflows/). Humans review every PR; no auto-merge.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
