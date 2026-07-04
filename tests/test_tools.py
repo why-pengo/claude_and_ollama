@@ -134,6 +134,16 @@ class TestUrlEncoding:
         assert result.startswith("ERROR")
         assert calls == []
 
+    def test_non_string_path_gets_deterministic_error(self, monkeypatch):
+        # Model args aren't schema-enforced; a None/list/int path must produce
+        # a clean ERROR result, not an AttributeError from .split().
+        calls = _capture_gh(monkeypatch)
+        for bad_path in (None, ["a", "b"], 7):
+            result = tools.github_get_file_contents({"owner": "o", "repo": "r", "path": bad_path})
+            assert result.startswith("ERROR")
+            assert "must be a string" in result
+        assert calls == []
+
 
 class TestIssueNumberValidation:
     def test_numeric_string_is_accepted(self, monkeypatch):

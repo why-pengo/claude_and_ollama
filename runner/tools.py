@@ -195,15 +195,19 @@ def _qp(value: object) -> str:
     return quote(str(value), safe="/")
 
 
-def _segment_error(value: str, field: str) -> str | None:
+def _segment_error(value: object, field: str) -> str | None:
     """Reject path values whose segments could escape the pinned URL prefix.
 
     api.github.com normalises dot-segments, so a `path` of `../../user/repos`
     would resolve outside `repos/{owner}/{repo}/contents/` even after
     percent-encoding (quote() does not touch dots). Empty segments (leading
     `/`, `//`, trailing `/`) are rejected too — none are meaningful in the
-    GitHub tree/ref namespaces these tools address.
+    GitHub tree/ref namespaces these tools address. Non-string values (the
+    args come from the model) get a deterministic ERROR rather than an
+    AttributeError bubbling up as a generic dispatch failure.
     """
+    if not isinstance(value, str):
+        return f"ERROR: {field} must be a string, got {type(value).__name__}: {value!r}"
     if any(seg in ("", ".", "..") for seg in value.split("/")):
         return f"ERROR: {field} {value!r} contains empty or dot path segments"
     return None
