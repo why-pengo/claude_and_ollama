@@ -185,7 +185,10 @@ Common targets — `make help` for the full list:
 - `make test-cov` — run with coverage, HTML report under `htmlcov/`
 - `make ci` — full pipeline: `check` + `test`
 
-Run `make ci` before opening a PR.
+Run `make ci` before opening a PR. GitHub Actions runs the same
+pipeline (`.github/workflows/ci.yml`) on every PR and push to `main`;
+the `ci` check is required by the `main` ruleset, so a red run blocks
+merge.
 
 ---
 
