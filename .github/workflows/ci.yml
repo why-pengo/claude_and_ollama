@@ -3,8 +3,8 @@
 # required status check in the main ruleset, so a red run blocks merge.
 #
 # Actions are pinned by commit SHA (tag in the comment) — tags are mutable
-# and this workflow runs with repo read access on every PR. Dependabot
-# (#124) keeps the pins current.
+# and this workflow runs with repo read access on every PR. Until #124
+# lands Dependabot config, bump the pins manually.
 
 name: CI
 
