@@ -17,13 +17,30 @@ extend-exclude = '''
 )/
 '''
 
-[tool.isort]
-profile = "black"
-line_length = 100
-skip = [".venv", "runner/.venv", "build", "dist"]
-# Treat runner modules as first-party so isort keeps the blank line between
-# third-party (httpx, yaml, pytest) and our own imports (gh, salvage, run_recipe).
-known_first_party = [
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["runner/.venv", "build", "dist"]
+
+[tool.ruff.lint]
+# E/W = pycodestyle, F = pyflakes, I = import order — parity with the
+# pre-ruff lint toolchain (#122 records the evaluation and mapping).
+# Ruff's defaults are narrower (E4/E7/E9/F), so select explicitly.
+# E2xx whitespace rules ruff leaves to formatters are enforced by
+# `black --check` in `make format-check` (see #122's evaluation).
+select = ["E", "W", "F", "I"]
+# E203/E501 mirror the previous linter's extend-ignore (black
+# compatibility). W503 from that list has no ruff equivalent — it's in
+# ruff's never-implement set, and listing it here is a config error.
+ignore = ["E203", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+# Treat runner modules as first-party so the blank line between third-party
+# (httpx, yaml, pytest) and our own imports (gh, salvage, run_recipe) holds.
+known-first-party = [
     "gh",
     "ollama_client",
     "prose_rescue",

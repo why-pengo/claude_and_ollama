@@ -47,26 +47,24 @@ install-dev: ## Create runner/.venv and install runtime + dev dependencies
 # Code Quality
 # =============================================================================
 
-format: ## Apply isort then black to runner/ and tests/
+format: ## Fix import order (ruff) then apply black to runner/ and tests/
 	$(VENV_CHECK)
-	@printf "$(BLUE)Formatting with isort...$(NC)\n"
-	$(VENV_BIN)/isort runner tests
+	@printf "$(BLUE)Fixing imports with ruff...$(NC)\n"
+	$(VENV_BIN)/ruff check --select I --fix runner tests
 	@printf "$(BLUE)Formatting with black...$(NC)\n"
 	$(VENV_BIN)/black runner tests
 	@printf "$(GREEN)Formatting complete$(NC)\n"
 
-format-check: ## Check formatting without modifying files (isort + black --check)
+format-check: ## Check formatting without modifying files (black --check; import order is lint's job)
 	$(VENV_CHECK)
-	@printf "$(BLUE)Checking isort...$(NC)\n"
-	$(VENV_BIN)/isort --check-only runner tests
 	@printf "$(BLUE)Checking black...$(NC)\n"
 	$(VENV_BIN)/black --check runner tests
 	@printf "$(GREEN)Format check passed$(NC)\n"
 
-lint: ## Lint runner/ and tests/ with flake8
+lint: ## Lint runner/ and tests/ with ruff (pyflakes/pycodestyle + import order)
 	$(VENV_CHECK)
-	@printf "$(BLUE)Running flake8...$(NC)\n"
-	$(VENV_BIN)/flake8 runner tests
+	@printf "$(BLUE)Running ruff...$(NC)\n"
+	$(VENV_BIN)/ruff check runner tests
 	@printf "$(GREEN)Lint complete$(NC)\n"
 
 typecheck: ## Static type check with mypy (runner/ and tests/ per pyproject config)
