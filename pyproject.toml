@@ -23,13 +23,15 @@ target-version = "py312"
 extend-exclude = ["runner/.venv", "build", "dist"]
 
 [tool.ruff.lint]
-# E/W = pycodestyle, F = pyflakes (flake8 parity); I = isort replacement.
+# E/W = pycodestyle, F = pyflakes, I = import order — parity with the
+# pre-ruff lint toolchain (#122 records the evaluation and mapping).
 # Ruff's defaults are narrower (E4/E7/E9/F), so select explicitly.
 # E2xx whitespace rules ruff leaves to formatters are enforced by
 # `black --check` in `make format-check` (see #122's evaluation).
 select = ["E", "W", "F", "I"]
-# E203/E501 mirror the old .flake8 extend-ignore (black compatibility).
-# W503 has no ruff equivalent — never implemented; nothing to ignore.
+# E203/E501 mirror the previous linter's extend-ignore (black
+# compatibility). W503 from that list has no ruff equivalent — it's in
+# ruff's never-implement set, and listing it here is a config error.
 ignore = ["E203", "E501"]
 
 [tool.ruff.lint.per-file-ignores]
