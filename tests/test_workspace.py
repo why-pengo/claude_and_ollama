@@ -250,3 +250,40 @@ class TestRestoreWorkspace:
         # No raise; emits nothing because the early-exit branch doesn't print.
         out = capsys.readouterr().out
         assert "restore" not in out
+
+
+class TestRestoreWorkspaceAfterGateMutations:
+    """eval-37's second symptom: restore_workspace must not wedge on
+    gate-artifact modifications left on the runner branch."""
+
+    def test_restores_from_dirty_runner_branch(self, tmp_path):
+        remote = tmp_path / "why-pengo" / "health_track.git"
+        remote.parent.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init", "--bare", "-b", "main", str(remote)],
+            check=True,
+            capture_output=True,
+        )
+        ws = tmp_path / "ws"
+        subprocess.run(["git", "clone", str(remote), str(ws)], check=True, capture_output=True)
+        for args in (
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+            ["checkout", "-b", "main"],
+        ):
+            rc, _, err = _git(args, ws)
+            assert rc == 0, f"setup `git {' '.join(args)}` failed: {err}"
+        _commit(ws, "init")
+        rc, _, err = _git(["push", "origin", "main"], ws)
+        assert rc == 0, err
+        # Session state: on a runner branch with a gate-artifact mutation.
+        rc, _, err = _git(["checkout", "-b", "runner/issue-1-x"], ws)
+        assert rc == 0, err
+        (ws / "README.md").write_text("mutated by make format")
+        restore_workspace(ws, "main")
+        rc, out, err = _git(["rev-parse", "--abbrev-ref", "HEAD"], ws)
+        assert rc == 0, err
+        assert out.strip() == "main"
+        rc, out, err = _git(["status", "--porcelain"], ws)
+        assert rc == 0, err
+        assert out.strip() == ""
