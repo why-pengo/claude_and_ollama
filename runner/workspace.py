@@ -183,6 +183,14 @@ def restore_workspace(workspace_dir: Path, base_branch: str) -> None:
     current = out.strip()
     if current == base_branch:
         return
+    # We're on the session's runner branch. Any local modifications there
+    # are gate artifacts (mutating verification commands — see run_gate),
+    # never user work: the pre-flight required a clean workspace at session
+    # start. Discard them so the checkout back to base_branch can't wedge
+    # (eval-37's second symptom).
+    rc, _, err = _git(["reset", "--hard"], workspace_dir)
+    if rc != 0:
+        print(f"[workspace] restore: `git reset --hard` failed in {workspace_dir}: {err.strip()}")
     rc, _, err = _git(["checkout", base_branch], workspace_dir)
     if rc != 0:
         print(

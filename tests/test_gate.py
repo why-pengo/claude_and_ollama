@@ -371,3 +371,37 @@ class TestFormatSalvageVerification:
         assert "FAILED test_x" in block
         # Passing command output stays out of the PR body.
         assert "quiet" not in block
+
+
+class TestRunGateMutatingCommands:
+    """eval-37 regression: verification commands that mutate the tree
+    (health_track's `make check` runs isort+black before flake8) must not
+    wedge the next gate run's checkout."""
+
+    def test_second_run_survives_mutating_command(self, rig):
+        # A command that rewrites a tracked file, like a formatter would.
+        cmds = [
+            VerificationCommand(name="mutate", command="echo reformatted > feature.txt"),
+            VerificationCommand(name="check", command="true"),
+        ]
+        first = run_gate(rig["workspace"], BRANCH, cmds)
+        assert first.aggregate_status == "pass"
+        # Tree is now dirty — before the fix, this second run raised
+        # GateError ("local changes would be overwritten by checkout").
+        sha2 = _commit(rig["publisher"], "feature.txt", "v2", "next commit")
+        rc, _, err = _git(["push", "origin", BRANCH], rig["publisher"])
+        assert rc == 0, err
+        second = run_gate(rig["workspace"], BRANCH, cmds)
+        assert second.sha == sha2
+        assert second.aggregate_status == "pass"
+
+    def test_mutations_discarded_not_carried_into_next_run(self, rig):
+        # The reset must discard the mutation so commands run against the
+        # actual branch tip, not a half-mutated tree.
+        mutate = [VerificationCommand(name="mutate", command="echo dirt > feature.txt")]
+        run_gate(rig["workspace"], BRANCH, mutate)
+        verify = [
+            VerificationCommand(name="content", command="grep -q v1 feature.txt"),
+        ]
+        gate = run_gate(rig["workspace"], BRANCH, verify)
+        assert gate.aggregate_status == "pass"

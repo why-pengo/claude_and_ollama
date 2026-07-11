@@ -77,6 +77,16 @@ def run_gate(
     # loop doesn't catch. Everything unsafe must exit as GateError.
     if not isinstance(branch, str) or not _SAFE_BRANCH_RE.fullmatch(branch):
         raise GateError(f"branch {branch!r} is unsafe to pass to git — gate cannot run")
+    # Discard local modifications before syncing. Verification commands can
+    # mutate the tree (health_track's `make check` runs isort+black before
+    # flake8), and a dirty tree wedges the checkout below — eval-37 lost its
+    # gate from the second commit onward this way. Anything discarded here
+    # is a gate artifact by construction: the pre-flight guaranteed a clean
+    # workspace at session start, and the runner branch only ever receives
+    # commits through the GitHub API.
+    rc, _, err = _git(["reset", "--hard"], workspace_dir)
+    if rc != 0:
+        raise GateError(f"`git reset --hard` failed: {err.strip()}")
     rc, _, err = _git(["fetch", "origin", branch], workspace_dir)
     if rc != 0:
         raise GateError(f"`git fetch origin {branch}` failed: {err.strip()}")
