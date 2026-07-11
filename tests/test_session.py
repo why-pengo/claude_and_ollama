@@ -334,7 +334,7 @@ class TestRunSessionProseRescue:
             ),
             _prose_msg(
                 '{"name": "github__create_pull_request", '
-                '"arguments": {"owner": "owner", "repo": "repo", "head": "h", "base": "b"}}'
+                '"arguments": {"owner": "owner", "repo": "repo", "head": "runner/issue-1-20260627-000000", "base": "main"}}'
             ),
             _prose_msg(
                 '{"name": "github__add_issue_comment", '
@@ -351,7 +351,7 @@ class TestRunSessionProseRescue:
             _tool_call_msg("github__issue_read", {"issue_number": 1}),
             _prose_msg(
                 '{"name": "github__create_pull_request", '
-                '"arguments": {"owner": "owner", "repo": "repo", "head": "h", "base": "b"}}'
+                '"arguments": {"owner": "owner", "repo": "repo", "head": "runner/issue-1-20260627-000000", "base": "main"}}'
             ),
             _tool_call_msg("github__add_issue_comment", {"body": "done"}),
         ]
@@ -389,7 +389,7 @@ class TestRunSessionProseRescue:
                     ),
                     _prose_msg(
                         '{"name": "github__create_pull_request", '
-                        '"arguments": {"owner": "owner", "repo": "repo", "head": "h", "base": "b"}}'
+                        '"arguments": {"owner": "owner", "repo": "repo", "head": "runner/issue-1-20260627-000000", "base": "main"}}'
                     ),
                     _prose_msg(
                         '{"name": "github__add_issue_comment", '
@@ -800,10 +800,10 @@ class TestRunSessionGateFeedback:
             conventions=[],
         )
 
-    def _commit_msg(self):
+    def _commit_msg(self, branch="runner/issue-1-20260627-000000"):
         return _tool_call_msg(
             "github__create_or_update_file",
-            {"branch": "runner/issue-1-x", "path": "f.py", "content": "c"},
+            {"branch": branch, "path": "f.py", "content": "c"},
         )
 
     def _runs(
@@ -817,13 +817,17 @@ class TestRunSessionGateFeedback:
         salvage=None,
         **kwargs,
     ):
-        """gate_results: queue of GateResult (or callables/exceptions) that
-        successive run_gate calls pop from; repeats the last one when empty."""
+        """gate_results: queue of GateResult that successive run_gate calls
+        pop from, repeating the last one when the queue empties. Each result
+        is stamped with the branch run_gate was asked to gate, so per-branch
+        PR-block filtering sees realistic state."""
+        import dataclasses
+
         queue = list(gate_results)
 
         def fake_run_gate(ws, branch, cmds):
             result = queue.pop(0) if len(queue) > 1 else queue[0]
-            return result
+            return dataclasses.replace(result, branch=branch)
 
         chat = _capturing_chat(scripted, seen) if seen is not None else _scripted_chat(scripted)
         monkeypatch.setattr(session, "ollama_chat", chat)
@@ -920,7 +924,10 @@ class TestRunSessionGateFeedback:
         rc = self._runs(monkeypatch, tmp_path, scripted, [_red_gate()], loop_detect_threshold=4)
         assert rc == 4
 
-    def test_signature_stable_across_reruns_of_same_failure(self):
+    def test_turn_signature_equal_for_identical_commit_messages(self):
+        # The property the rc-4 loop-detect test above rides on: a model
+        # re-emitting a structurally identical failing commit produces an
+        # equal signature.
         import copy
 
         from prose_rescue import turn_signature
@@ -953,3 +960,148 @@ class TestRunSessionGateFeedback:
         assert len(salvage_calls) == 1
         assert salvage_calls[0] is not None
         assert salvage_calls[0][-1].aggregate_status == "fail"
+
+
+class TestRunSessionPrGatePinning:
+    """The PR-open block must not be steerable via model-controlled
+    head/base args (#148 review): mismatches are refused, and the gate
+    check keys on the head branch's last gate, not the global last gate."""
+
+    SESSION_BRANCH = "runner/issue-1-20260627-000000"
+
+    def _agents(self):
+        return ParsedAgentsMd(
+            verification_commands=[VerificationCommand(name="check", command="make check")],
+            conventions=[],
+        )
+
+    def _commit(self, branch):
+        return _tool_call_msg(
+            "github__create_or_update_file",
+            {"branch": branch, "path": "f.py", "content": "c"},
+        )
+
+    def _runs(self, monkeypatch, tmp_path, scripted, gate_results, dispatch=None):
+        import dataclasses
+
+        queue = list(gate_results)
+
+        def fake_run_gate(ws, branch, cmds):
+            result = queue.pop(0) if len(queue) > 1 else queue[0]
+            return dataclasses.replace(result, branch=branch)
+
+        monkeypatch.setattr(session, "ollama_chat", _scripted_chat(scripted))
+        monkeypatch.setattr(session, "DISPATCH", dispatch or _ok_dispatch())
+        monkeypatch.setattr(session, "attempt_salvage", lambda *a, **kw: None)
+        monkeypatch.setattr(session, "run_gate", fake_run_gate)
+        return run_session(
+            host="http://example",
+            model="m",
+            recipe_path=_minimal_recipe(tmp_path),
+            params={
+                "base_branch": "main",
+                "repo": "owner/repo",
+                "issue_number": "1",
+                "branch": self.SESSION_BRANCH,
+            },
+            max_turns=10,
+            salvage_enabled=False,
+            turn_timeout=10.0,
+            workspace_dir=tmp_path,
+            agents_md=self._agents(),
+        )
+
+    def _tracking_dispatch(self, pr_impl_calls):
+        dispatch = _ok_dispatch()
+        dispatch["github__create_pull_request"] = lambda args: pr_impl_calls.append(args) or "OK"
+        return dispatch
+
+    def test_head_mismatch_refused_even_when_gate_green(self, monkeypatch, tmp_path, capsys):
+        pr_impl_calls = []
+        scripted = [
+            self._commit(self.SESSION_BRANCH),  # green gate on session branch
+            _tool_call_msg(
+                "github__create_pull_request",
+                {"head": "some-other-branch", "base": "main"},
+            ),
+            _prose_msg("hm"),
+            _prose_msg("hm"),
+            _prose_msg("hm"),
+        ]
+        rc = self._runs(
+            monkeypatch,
+            tmp_path,
+            scripted,
+            [_green_gate()],
+            dispatch=self._tracking_dispatch(pr_impl_calls),
+        )
+        assert rc == 2
+        assert pr_impl_calls == []
+        assert "head/base mismatch" in capsys.readouterr().out
+
+    def test_base_mismatch_refused(self, monkeypatch, tmp_path, capsys):
+        pr_impl_calls = []
+        scripted = [
+            self._commit(self.SESSION_BRANCH),
+            _tool_call_msg(
+                "github__create_pull_request",
+                {"head": self.SESSION_BRANCH, "base": "develop"},
+            ),
+            _prose_msg("hm"),
+            _prose_msg("hm"),
+            _prose_msg("hm"),
+        ]
+        rc = self._runs(
+            monkeypatch,
+            tmp_path,
+            scripted,
+            [_green_gate()],
+            dispatch=self._tracking_dispatch(pr_impl_calls),
+        )
+        assert rc == 2
+        assert pr_impl_calls == []
+        assert "head/base mismatch" in capsys.readouterr().out
+
+    def test_green_gate_on_side_branch_does_not_launder_red_session_branch(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        # The bypass from the review: red commit on the session branch, then
+        # a trivially-green commit on a side branch. The global last gate is
+        # green, but the session branch's last gate is red — PR must block.
+        pr_impl_calls = []
+        scripted = [
+            self._commit(self.SESSION_BRANCH),  # red
+            self._commit("side-quest"),  # green
+            _tool_call_msg("github__create_pull_request", {}),
+            _prose_msg("hm"),
+            _prose_msg("hm"),
+            _prose_msg("hm"),
+        ]
+        rc = self._runs(
+            monkeypatch,
+            tmp_path,
+            scripted,
+            [_red_gate(), _green_gate()],
+            dispatch=self._tracking_dispatch(pr_impl_calls),
+        )
+        assert rc == 2
+        assert pr_impl_calls == []
+        assert "blocked — last gate red" in capsys.readouterr().out
+
+    def test_red_gate_on_side_branch_does_not_block_session_pr(self, monkeypatch, tmp_path):
+        pr_impl_calls = []
+        scripted = [
+            self._commit("side-quest"),  # red, but not the PR's head
+            self._commit(self.SESSION_BRANCH),  # green
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        rc = self._runs(
+            monkeypatch,
+            tmp_path,
+            scripted,
+            [_red_gate(), _green_gate()],
+            dispatch=self._tracking_dispatch(pr_impl_calls),
+        )
+        assert rc == 0
+        assert len(pr_impl_calls) == 1

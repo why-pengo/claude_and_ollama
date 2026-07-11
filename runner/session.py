@@ -59,6 +59,37 @@ SYSTEM_PROMPT_PATH = REPO_ROOT / "prompts" / "system-prompt.md"
 GATED_TOOLS = frozenset({"github__create_or_update_file", "github__push_files"})
 
 
+def _pr_gate_error(args_dict: dict, params: dict, gate_state: list[GateResult]) -> str | None:
+    """Refuse create_pull_request calls that would dodge the gate (#109).
+
+    head/base are model-controlled inputs. A PR for a branch other than the
+    session's would decouple the gate check from what's actually being
+    merged, so mismatches are refused outright (same philosophy as repo
+    pinning). The gate check then keys on the last gate run *for the head
+    branch*, not the last gate run globally — a green gate on an unrelated
+    branch must not launder a red one.
+    """
+    head = args_dict.get("head")
+    base = args_dict.get("base")
+    expected_head = params.get("branch", "")
+    expected_base = params.get("base_branch", "")
+    if head and expected_head and head != expected_head:
+        return (
+            f"ERROR: Cannot open PR: head {head!r} does not match the session's "
+            f"branch {expected_head!r}. Open the PR from the session branch."
+        )
+    if base and expected_base and base != expected_base:
+        return (
+            f"ERROR: Cannot open PR: base {base!r} does not match the session's "
+            f"base_branch {expected_base!r}. Open the PR against the session base."
+        )
+    target = head or expected_head
+    head_gates = [g for g in gate_state if g.branch == target]
+    if head_gates and head_gates[-1].aggregate_status == "fail":
+        return format_pr_block_error(head_gates[-1])
+    return None
+
+
 def _extract_branch(messages: list) -> str | None:
     """Pull the branch name from the most recent create_branch tool call."""
     for m in reversed(messages):
@@ -298,14 +329,13 @@ def run_session(
                     # an empty pin (direct run_session callers) skips the check.
                     pin_err = repo_pin_error(args_dict, pinned_repo) if pinned_repo else None
                     # PR-open block (#109): create_pull_request is refused
-                    # while the last recorded gate run had any failure. The
-                    # ERROR result never reaches `succeeded`, so recipe_done
-                    # can't fire off a blocked call.
+                    # on a head/base mismatch or while the head branch's
+                    # last gate run had any failure. The ERROR result never
+                    # reaches `succeeded`, so recipe_done can't fire off a
+                    # blocked call.
                     gate_block_err = (
-                        format_pr_block_error(gate_state[-1])
+                        _pr_gate_error(args_dict, params, gate_state)
                         if fn_name == "github__create_pull_request"
-                        and gate_state
-                        and gate_state[-1].aggregate_status == "fail"
                         else None
                     )
                     if impl is None:
@@ -316,7 +346,12 @@ def run_session(
                         result = pin_err
                     elif gate_block_err is not None:
                         result = gate_block_err
-                        print("  [runner: create_pull_request blocked — last gate red]")
+                        reason = (
+                            "last gate red"
+                            if "verification failing" in gate_block_err
+                            else "head/base mismatch"
+                        )
+                        print(f"  [runner: create_pull_request blocked — {reason}]")
                     else:
                         try:
                             result = impl(args_dict)

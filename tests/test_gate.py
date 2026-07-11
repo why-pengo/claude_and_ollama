@@ -92,6 +92,7 @@ class TestRunGate:
         assert [r.exit_code for r in gate.results] == [0, 0]
         assert [r.name for r in gate.results] == ["check", "test"]
         assert gate.sha == rig["sha"]
+        assert gate.branch == BRANCH
         # The sync materialized the published commit in the workspace.
         assert (rig["workspace"] / "feature.txt").read_text() == "v1"
 

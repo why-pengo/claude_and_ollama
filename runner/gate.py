@@ -55,6 +55,10 @@ class GateResult:
     sha: str  # the branch tip the commands ran against
     results: list[CommandResult]
     aggregate_status: str  # "pass" if every command exited 0, else "fail"
+    # Which branch was gated. The PR-open block keys on this so a green
+    # gate on an unrelated branch can't launder a red one (#109 review).
+    # Default "" only for pre-#109 constructions; run_gate always sets it.
+    branch: str = ""
 
 
 def run_gate(
@@ -105,7 +109,7 @@ def run_gate(
             )
         )
     aggregate = "pass" if all(r.passed for r in results) else "fail"
-    return GateResult(sha=sha, results=results, aggregate_status=aggregate)
+    return GateResult(sha=sha, results=results, aggregate_status=aggregate, branch=branch)
 
 
 # Closing hint of the failure-feed-back message (locked decision on #109):
