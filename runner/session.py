@@ -23,6 +23,7 @@ from pathlib import Path
 
 import httpx
 from agents_md import ParsedAgentsMd, format_agents_summary
+from gate import GateError, GateResult, format_gate_block, run_gate
 
 from ollama_client import (
     extract_turn_metrics,
@@ -43,6 +44,11 @@ from tools import DISPATCH, TOOL_SCHEMAS, log_tool_call, repo_pin_error
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SYSTEM_PROMPT_PATH = REPO_ROOT / "prompts" / "system-prompt.md"
+
+# Each successful call to one of these is one commit on the runner branch,
+# so each triggers a post-commit gate run (#108). Read-only tools, branch
+# creation, PR, and comment calls never trigger the gate.
+GATED_TOOLS = frozenset({"github__create_or_update_file", "github__push_files"})
 
 
 def _extract_branch(messages: list) -> str | None:
@@ -185,6 +191,9 @@ def run_session(
     # Per-turn timing metrics extracted from each /api/chat response.
     # Drives the per-turn log line and the end-of-session summary (#88).
     turn_metrics: list[dict] = []
+    # Post-commit gate results (#108), newest last. #109's feedback loop and
+    # PR-open block consume this; today it drives the session.log block only.
+    gate_state: list[GateResult] = []
     # Counter of turn signatures since the last successful new tool name
     # reached `succeeded`. eval-26 showed sampling-collapse loops that
     # alternate identical tool calls with identical prose blobs, so the
@@ -279,6 +288,31 @@ def run_session(
                     )
                     if _tool_result_succeeded(result):
                         succeeded.add(fn_name)
+                        # Post-commit gate (#108): the commit just landed on
+                        # the branch named in the call's own args, so gate
+                        # that branch (fall back to the session param if the
+                        # model omitted it and the API defaulted).
+                        if (
+                            fn_name in GATED_TOOLS
+                            and workspace_dir is not None
+                            and agents_md is not None
+                        ):
+                            gate_branch = args_dict.get("branch") or params.get("branch", "")
+                            try:
+                                gate_result = run_gate(
+                                    workspace_dir,
+                                    gate_branch,
+                                    agents_md.verification_commands,
+                                )
+                            except GateError as e:
+                                # Environment problem, not a red gate — skip
+                                # loudly rather than record a failure the
+                                # model's code didn't cause.
+                                print(f"  [gate] ERROR: {e} — gate skipped for this commit")
+                            else:
+                                gate_state.append(gate_result)
+                                block = format_gate_block(gate_result)
+                                print("\n".join(f"  {line}" for line in block.splitlines()))
                 if recipe_done(succeeded):
                     print(f"\n=== Recipe complete: PR + issue comment both fired (turn {turn}) ===")
                     print(format_session_metrics_summary(turn_metrics))

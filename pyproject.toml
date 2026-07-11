@@ -71,6 +71,7 @@ warn_unused_ignores = true
 module = [
     "conftest",
     "test_agents_md",
+    "test_gate",
     "test_gh",
     "test_ollama_client",
     "test_prose_rescue",

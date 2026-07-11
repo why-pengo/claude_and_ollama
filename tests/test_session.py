@@ -1,6 +1,7 @@
 """Unit tests for runner/session.py — extractors, salvage trigger, run_session loop."""
 
 from agents_md import ParsedAgentsMd, VerificationCommand
+from gate import CommandResult, GateError, GateResult
 
 import session
 from session import _extract_branch, _extract_issue_title, run_session
@@ -552,3 +553,188 @@ class TestRunSessionAgentsBanner:
         rc = self._runs(monkeypatch, tmp_path, None)
         assert rc == 0
         assert "AGENTS:" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# run_session post-commit gate wiring (#108)
+# ---------------------------------------------------------------------------
+
+
+class TestRunSessionGateWiring:
+    """run_gate itself is covered by test_gate.py against real git repos;
+    these tests pin WHEN the session loop invokes it (file-commit tools
+    only, successful results only, agents_md + workspace present) and how
+    its output/failure surfaces in the log."""
+
+    def _agents(self):
+        return ParsedAgentsMd(
+            verification_commands=[VerificationCommand(name="check", command="make check")],
+            conventions=[],
+        )
+
+    def _pass_result(self):
+        return GateResult(
+            sha="a" * 40,
+            results=[
+                CommandResult(
+                    name="check",
+                    command="make check",
+                    exit_code=0,
+                    stdout="",
+                    stderr="",
+                    elapsed=0.1,
+                )
+            ],
+            aggregate_status="pass",
+        )
+
+    def _runs(
+        self,
+        monkeypatch,
+        tmp_path,
+        scripted,
+        fake_run_gate,
+        agents_md="default",
+        dispatch=None,
+        params_branch="runner/issue-1-20260627-000000",
+    ):
+        monkeypatch.setattr(session, "ollama_chat", _scripted_chat(scripted))
+        monkeypatch.setattr(session, "DISPATCH", dispatch or _ok_dispatch())
+        monkeypatch.setattr(session, "attempt_salvage", lambda *a, **kw: None)
+        monkeypatch.setattr(session, "run_gate", fake_run_gate)
+        return run_session(
+            host="http://example",
+            model="m",
+            recipe_path=_minimal_recipe(tmp_path),
+            params={
+                "base_branch": "main",
+                "repo": "owner/repo",
+                "issue_number": "1",
+                "branch": params_branch,
+            },
+            max_turns=8,
+            salvage_enabled=False,
+            turn_timeout=10.0,
+            workspace_dir=tmp_path,
+            agents_md=self._agents() if agents_md == "default" else agents_md,
+        )
+
+    def test_gate_runs_after_create_or_update_file(self, monkeypatch, tmp_path, capsys):
+        calls = []
+
+        def fake(ws, branch, cmds):
+            calls.append((ws, branch, [c.name for c in cmds]))
+            return self._pass_result()
+
+        scripted = [
+            _tool_call_msg(
+                "github__create_or_update_file",
+                {"branch": "runner/issue-1-x", "path": "f.py", "content": "c"},
+            ),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        rc = self._runs(monkeypatch, tmp_path, scripted, fake)
+        assert rc == 0
+        # Gated the branch named in the tool call's own args.
+        assert calls == [(tmp_path, "runner/issue-1-x", ["check"])]
+        out = capsys.readouterr().out
+        assert "[gate: make check] PASS" in out
+        assert "aggregate: PASS (1/1 passed)" in out
+
+    def test_gate_runs_after_push_files(self, monkeypatch, tmp_path):
+        calls = []
+
+        def fake(ws, branch, cmds):
+            calls.append(branch)
+            return self._pass_result()
+
+        scripted = [
+            _tool_call_msg(
+                "github__push_files",
+                {"branch": "runner/issue-1-x", "files": [], "message": "m"},
+            ),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        assert self._runs(monkeypatch, tmp_path, scripted, fake) == 0
+        assert calls == ["runner/issue-1-x"]
+
+    def test_gate_skips_non_file_tools(self, monkeypatch, tmp_path):
+        calls = []
+
+        def fake(ws, branch, cmds):
+            calls.append(branch)
+            return self._pass_result()
+
+        scripted = [
+            _tool_call_msg("github__issue_read", {"issue_number": 1}),
+            _tool_call_msg("github__create_branch", {"branch": "b", "from_branch": "main"}),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        assert self._runs(monkeypatch, tmp_path, scripted, fake) == 0
+        assert calls == []
+
+    def test_gate_skipped_without_agents_md(self, monkeypatch, tmp_path):
+        calls = []
+
+        def fake(ws, branch, cmds):
+            calls.append(branch)
+            return self._pass_result()
+
+        scripted = [
+            _tool_call_msg("github__create_or_update_file", {"branch": "b", "path": "f"}),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        assert self._runs(monkeypatch, tmp_path, scripted, fake, agents_md=None) == 0
+        assert calls == []
+
+    def test_gate_skipped_when_commit_call_fails(self, monkeypatch, tmp_path):
+        calls = []
+
+        def fake(ws, branch, cmds):
+            calls.append(branch)
+            return self._pass_result()
+
+        dispatch = _ok_dispatch()
+        dispatch["github__create_or_update_file"] = lambda args: "ERROR: 422 conflict"
+        scripted = [
+            _tool_call_msg("github__create_or_update_file", {"branch": "b", "path": "f"}),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        assert self._runs(monkeypatch, tmp_path, scripted, fake, dispatch=dispatch) == 0
+        assert calls == []
+
+    def test_gate_error_skips_loudly_and_session_continues(self, monkeypatch, tmp_path, capsys):
+        def fake(ws, branch, cmds):
+            raise GateError("`git fetch origin b` failed: network down")
+
+        scripted = [
+            _tool_call_msg("github__create_or_update_file", {"branch": "b", "path": "f"}),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        assert self._runs(monkeypatch, tmp_path, scripted, fake) == 0
+        out = capsys.readouterr().out
+        assert "[gate] ERROR:" in out
+        assert "gate skipped for this commit" in out
+
+    def test_gate_branch_falls_back_to_session_param(self, monkeypatch, tmp_path):
+        calls = []
+
+        def fake(ws, branch, cmds):
+            calls.append(branch)
+            return self._pass_result()
+
+        # Model omitted `branch` in the commit call — the API would default,
+        # so the gate falls back to the session's generated branch param.
+        scripted = [
+            _tool_call_msg("github__create_or_update_file", {"path": "f", "content": "c"}),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        assert self._runs(monkeypatch, tmp_path, scripted, fake) == 0
+        assert calls == ["runner/issue-1-20260627-000000"]
