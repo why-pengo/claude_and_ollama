@@ -128,8 +128,10 @@ def _validate_commands(raw: object) -> list[VerificationCommand]:
             raise _schema_error(f"{where} must be a mapping with keys name+command, got {entry!r}")
         extra = set(entry) - _COMMAND_KEYS
         if extra:
+            # key=repr: YAML mapping keys can be non-strings, and sorting a
+            # mixed-type set raises TypeError — this path must stay AgentsMdError.
             raise _schema_error(
-                f"{where} has unexpected key(s) {sorted(extra)} — only 'name' and "
+                f"{where} has unexpected key(s) {sorted(extra, key=repr)} — only 'name' and "
                 f"'command' are allowed (this guards against typos like 'cmd:' "
                 f"silently dropping a command): {entry!r}"
             )

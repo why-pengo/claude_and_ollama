@@ -218,6 +218,17 @@ class TestParseAgentsMdFailureModes:
             parse_agents_md(doc)
         _assert_schema_error(excinfo, "unexpected key(s)", "cmd")
 
+    def test_mixed_type_unexpected_keys_still_reject_cleanly(self):
+        # YAML mapping keys can be non-strings; sorting a mixed-type key set
+        # must not crash with TypeError — this path stays AgentsMdError.
+        doc = CONFORMING.replace(
+            "- name: test\n  command: make test",
+            "- name: test\n  command: make test\n  cmd: typo\n  42: numeric-key",
+        )
+        with pytest.raises(AgentsMdError) as excinfo:
+            parse_agents_md(doc)
+        _assert_schema_error(excinfo, "unexpected key(s)", "cmd", "42")
+
     def test_non_string_command_rejected(self):
         doc = CONFORMING.replace("command: make test", "command: 42")
         with pytest.raises(AgentsMdError) as excinfo:
