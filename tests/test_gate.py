@@ -11,7 +11,16 @@ from pathlib import Path
 
 import pytest
 from agents_md import VerificationCommand
-from gate import CommandResult, GateError, GateResult, format_gate_block, run_gate
+from gate import (
+    CommandResult,
+    GateError,
+    GateResult,
+    format_gate_block,
+    format_gate_failure_message,
+    format_pr_block_error,
+    format_salvage_verification,
+    run_gate,
+)
 
 from tools import TOOL_RESULT_SIZE_CAP
 from workspace import _git
@@ -83,6 +92,7 @@ class TestRunGate:
         assert [r.exit_code for r in gate.results] == [0, 0]
         assert [r.name for r in gate.results] == ["check", "test"]
         assert gate.sha == rig["sha"]
+        assert gate.branch == BRANCH
         # The sync materialized the published commit in the workspace.
         assert (rig["workspace"] / "feature.txt").read_text() == "v1"
 
@@ -211,3 +221,153 @@ class TestFormatGateBlock:
         block = format_gate_block(gate)
         assert "[gate: make check] PASS (0.5s)" in block
         assert "[gate @ abcdef12] aggregate: PASS (1/1 passed)" in block
+
+
+class TestFormatGateFailureMessage:
+    SHA = "abcdef1234567890abcdef1234567890abcdef12"
+
+    def _mixed_gate(self):
+        return GateResult(
+            sha=self.SHA,
+            results=[
+                CommandResult(
+                    name="check",
+                    command="make check",
+                    exit_code=1,
+                    stdout="lint failed on runner/gate.py",
+                    stderr="",
+                    elapsed=2.0,
+                ),
+                CommandResult(
+                    name="test",
+                    command="make test",
+                    exit_code=2,
+                    stdout="",
+                    stderr="3 failed, 200 passed",
+                    elapsed=30.5,
+                ),
+                CommandResult(
+                    name="typecheck",
+                    command="make typecheck",
+                    exit_code=0,
+                    stdout="quiet-pass-output",
+                    stderr="",
+                    elapsed=3.1,
+                ),
+            ],
+            aggregate_status="fail",
+        )
+
+    def test_multi_failure_message_shape(self):
+        msg = format_gate_failure_message(self._mixed_gate())
+        assert msg.startswith("Verification failed after your last commit.")
+        assert "2 of 3 commands failed." in msg
+        # Every failing command gets its own block with output...
+        assert "[FAIL] make check (exit 1)" in msg
+        assert "lint failed on runner/gate.py" in msg
+        assert "[FAIL] make test (exit 2)" in msg
+        assert "3 failed, 200 passed" in msg
+        # ...passing commands get a one-line summary, output omitted.
+        assert "[PASS] make typecheck (3.1s)" in msg
+        assert "quiet-pass-output" not in msg
+        # The locked intermediate-state hint closes the message.
+        assert "If you were planning to land additional commits" in msg
+        assert "Do not open the PR until all verification commands" in msg
+
+    def test_single_failure_no_pass_summary(self):
+        gate = GateResult(
+            sha=self.SHA,
+            results=[
+                CommandResult(
+                    name="check",
+                    command="make check",
+                    exit_code=1,
+                    stdout="boom",
+                    stderr="",
+                    elapsed=1.0,
+                )
+            ],
+            aggregate_status="fail",
+        )
+        msg = format_gate_failure_message(gate)
+        assert "1 of 1 commands failed." in msg
+        assert "[PASS]" not in msg
+
+
+class TestFormatPrBlockError:
+    def test_names_count_and_failed_commands(self):
+        gate = GateResult(
+            sha="a" * 40,
+            results=[
+                CommandResult(
+                    name="check",
+                    command="make check",
+                    exit_code=1,
+                    stdout="",
+                    stderr="",
+                    elapsed=1.0,
+                ),
+                CommandResult(
+                    name="test",
+                    command="make test",
+                    exit_code=1,
+                    stdout="",
+                    stderr="",
+                    elapsed=1.0,
+                ),
+                CommandResult(
+                    name="typecheck",
+                    command="make typecheck",
+                    exit_code=0,
+                    stdout="",
+                    stderr="",
+                    elapsed=1.0,
+                ),
+            ],
+            aggregate_status="fail",
+        )
+        err = format_pr_block_error(gate)
+        # Must start with ERROR so _tool_result_succeeded stays False.
+        assert err.startswith("ERROR: Cannot open PR: verification failing on HEAD.")
+        assert "2 of 3 commands failed: check, test." in err
+        assert "Fix and re-commit before opening the PR." in err
+
+
+class TestFormatSalvageVerification:
+    def test_no_gate_recorded(self):
+        block = format_salvage_verification(None)
+        assert "no gate run was recorded" in block
+        assert "manually" in block
+
+    def test_gate_results_listed_with_failure_output(self):
+        gate = GateResult(
+            sha="abcdef1234567890abcdef1234567890abcdef12",
+            results=[
+                CommandResult(
+                    name="check",
+                    command="make check",
+                    exit_code=0,
+                    stdout="quiet",
+                    stderr="",
+                    elapsed=1.2,
+                ),
+                CommandResult(
+                    name="test",
+                    command="make test",
+                    exit_code=1,
+                    stdout="FAILED test_x",
+                    stderr="",
+                    elapsed=9.9,
+                ),
+            ],
+            aggregate_status="fail",
+        )
+        block = format_salvage_verification(gate)
+        assert "Salvage skips the gate" in block
+        assert "`abcdef12`" in block
+        assert "**FAIL**" in block
+        assert "- `make check`: PASS (1.2s)" in block
+        assert "- `make test`: FAIL (exit 1)" in block
+        assert "FAILED test_x" in block
+        # Passing command output stays out of the PR body.
+        assert "quiet" not in block

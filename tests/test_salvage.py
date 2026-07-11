@@ -70,3 +70,55 @@ class TestFormatSalvageStatus:
         # this refactor is byte-identical to before).
         s = format_salvage_status({"status": "rate_limited"}, "runner/issue-51-foo", "main")
         assert s == "? Unexpected salvage status: rate_limited"
+
+
+class TestSalvagePrVerificationBlock:
+    """salvage_pr's gh round-trip stays smoke-tested, but the PR body's
+    ## Verification content (#109) is worth pinning with a mocked _gh."""
+
+    def _fake_gh(self, captured):
+        def fake(args, stdin=None, timeout=120):
+            path = args[1] if len(args) > 1 else ""
+            if "/branches/" in path:
+                return 0, "{}", ""
+            if "/pulls?state=open" in path:
+                return 0, "", ""  # no existing PR
+            if "/compare/" in path:
+                return 0, '["feat: thing"]', ""
+            if args[:2] == ["api", "-X"] or "-X" in args:
+                captured.append(stdin)
+                return 0, '{"number": 9, "url": "https://x/pull/9"}', ""
+            return 1, "", "unexpected call"
+
+        return fake
+
+    def test_custom_verification_block_lands_in_body(self, monkeypatch):
+        import json as _json
+
+        import salvage as salvage_mod
+
+        captured = []
+        monkeypatch.setattr(salvage_mod, "_gh", self._fake_gh(captured))
+        result = salvage_mod.salvage_pr(
+            "o/r",
+            "runner/issue-1-x",
+            "main",
+            1,
+            "title",
+            verification_block="- `make check`: FAIL (exit 1)",
+        )
+        assert result["status"] == "opened"
+        body = _json.loads(captured[0])["body"]
+        assert "## Verification\n- `make check`: FAIL (exit 1)" in body
+
+    def test_none_falls_back_to_pre_gate_wording(self, monkeypatch):
+        import json as _json
+
+        import salvage as salvage_mod
+
+        captured = []
+        monkeypatch.setattr(salvage_mod, "_gh", self._fake_gh(captured))
+        result = salvage_mod.salvage_pr("o/r", "runner/issue-1-x", "main", 1, "title")
+        assert result["status"] == "opened"
+        body = _json.loads(captured[0])["body"]
+        assert "Not executed by the model." in body

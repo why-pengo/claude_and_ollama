@@ -55,6 +55,10 @@ class GateResult:
     sha: str  # the branch tip the commands ran against
     results: list[CommandResult]
     aggregate_status: str  # "pass" if every command exited 0, else "fail"
+    # Which branch was gated. The PR-open block keys on this so a green
+    # gate on an unrelated branch can't launder a red one (#109 review).
+    # Default "" only for pre-#109 constructions; run_gate always sets it.
+    branch: str = ""
 
 
 def run_gate(
@@ -105,7 +109,95 @@ def run_gate(
             )
         )
     aggregate = "pass" if all(r.passed for r in results) else "fail"
-    return GateResult(sha=sha, results=results, aggregate_status=aggregate)
+    return GateResult(sha=sha, results=results, aggregate_status=aggregate, branch=branch)
+
+
+# Closing hint of the failure-feed-back message (locked decision on #109):
+# gives the model permission to ignore intermediate-state failures when it
+# intended further commits (e.g. test_x.py landed before x.py), without
+# licensing it to ignore real failures.
+GATE_FEEDBACK_HINT = (
+    "If you were planning to land additional commits before this state is verified,\n"
+    "continue with the next commit — the gate will re-run after each. Otherwise fix\n"
+    "the failures and re-commit. Do not open the PR until all verification commands\n"
+    "pass."
+)
+
+
+def format_gate_failure_message(gate: GateResult) -> str:
+    """The user-role message fed back to the model after a red gate (#109).
+
+    Reports every failed command with its truncated output (mirroring the
+    gate's run-all semantics — the model sees the complete failure picture
+    in one cycle), a one-line summary per passing command, and the
+    intermediate-state hint.
+    """
+    failed = [r for r in gate.results if not r.passed]
+    passed = [r for r in gate.results if r.passed]
+    lines = [
+        "Verification failed after your last commit.",
+        "",
+        f"{len(failed)} of {len(gate.results)} commands failed.",
+        "",
+    ]
+    for r in failed:
+        lines.append(f"[FAIL] {r.command} (exit {r.exit_code})")
+        for stream in (r.stdout, r.stderr):
+            if stream.strip():
+                lines.append(stream.rstrip())
+        lines.append("")
+    for r in passed:
+        lines.append(f"[PASS] {r.command} ({r.elapsed:.1f}s)")
+    if passed:
+        lines.append("")
+    lines.append(GATE_FEEDBACK_HINT)
+    return "\n".join(lines)
+
+
+def format_pr_block_error(gate: GateResult) -> str:
+    """Tool-result error for a create_pull_request call blocked on a red gate.
+
+    Starts with "ERROR" so `_tool_result_succeeded` is False — a blocked PR
+    call must never count toward `recipe_done`.
+    """
+    failed = [r.name for r in gate.results if not r.passed]
+    return (
+        "ERROR: Cannot open PR: verification failing on HEAD. "
+        f"{len(failed)} of {len(gate.results)} commands failed: {', '.join(failed)}. "
+        "Fix and re-commit before opening the PR."
+    )
+
+
+def format_salvage_verification(gate: GateResult | None) -> str:
+    """Body of the salvaged PR's `## Verification` block (#109).
+
+    Salvage skips the gate (running it twice defeats the emergency-path
+    purpose), so this reports the last recorded gate run — per-command
+    pass/fail with truncated failure output — and says so plainly. With no
+    gate run recorded, the reviewer is told verification never happened.
+    """
+    if gate is None:
+        return (
+            "Not executed by the model, and no gate run was recorded this "
+            "session. Reviewer should run the issue's acceptance criteria "
+            "manually before merging."
+        )
+    lines = [
+        f"Salvage skips the gate. Last recorded gate run (at `{gate.sha[:8]}`): "
+        f"**{gate.aggregate_status.upper()}** — results may predate the branch tip.",
+        "",
+    ]
+    for r in gate.results:
+        if r.passed:
+            lines.append(f"- `{r.command}`: PASS ({r.elapsed:.1f}s)")
+        else:
+            lines.append(f"- `{r.command}`: FAIL (exit {r.exit_code})")
+            output = "\n".join(s.rstrip() for s in (r.stdout, r.stderr) if s.strip())
+            if output:
+                lines.append("  ```")
+                lines.extend(f"  {out_line}" for out_line in output.splitlines())
+                lines.append("  ```")
+    return "\n".join(lines)
 
 
 def format_gate_block(gate: GateResult) -> str:
