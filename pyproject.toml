@@ -70,6 +70,7 @@ warn_unused_ignores = true
 # high-cost, low-value. The runner code still enforces full annotations.
 module = [
     "conftest",
+    "test_agents_md",
     "test_gh",
     "test_ollama_client",
     "test_prose_rescue",

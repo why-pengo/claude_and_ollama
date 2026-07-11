@@ -29,6 +29,8 @@ import os
 import sys
 from pathlib import Path
 
+from agents_md import AgentsMdError, load_target_agents_md
+
 from gh import _gh, check_gh_auth
 from recipe import generate_branch_name
 from session import run_session
@@ -213,6 +215,15 @@ def main() -> int:
         print(f"Workspace pre-flight failed: {e}", file=sys.stderr)
         return 2
 
+    # AGENTS.md pre-flight (#107): fetch from base_branch (not GitHub's
+    # default_branch — decision A) and parse strictly. Missing or malformed
+    # rejects before the session loop ever starts.
+    try:
+        agents_md = load_target_agents_md(params["repo"], params["base_branch"])
+    except AgentsMdError as e:
+        print(f"AGENTS.md pre-flight failed: {e}", file=sys.stderr)
+        return 2
+
     try:
         return run_session(
             host=args.ollama_host,
@@ -225,6 +236,7 @@ def main() -> int:
             turn_timeout=args.turn_timeout,
             loop_detect_threshold=None if args.no_loop_detect else args.loop_detect_threshold,
             workspace_dir=args.workspace_dir,
+            agents_md=agents_md,
         )
     finally:
         restore_workspace(args.workspace_dir, params["base_branch"])

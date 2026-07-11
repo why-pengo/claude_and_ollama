@@ -22,6 +22,7 @@ from collections import Counter
 from pathlib import Path
 
 import httpx
+from agents_md import ParsedAgentsMd, format_agents_summary
 
 from ollama_client import (
     extract_turn_metrics,
@@ -144,6 +145,7 @@ def run_session(
     turn_timeout: float = 600.0,
     loop_detect_threshold: int | None = 4,
     workspace_dir: Path | None = None,
+    agents_md: ParsedAgentsMd | None = None,
 ) -> int:
     recipe_prompt, recipe_title, recipe_steps, recipe_options = load_recipe(recipe_path, params)
     # load_recipe filled in YAML-declared defaults; now safe to template the
@@ -163,6 +165,11 @@ def run_session(
     print(f"Ollama:         {host}")
     if workspace_dir is not None:
         print(f"Workspace:      {workspace_dir}")
+    # `agents_md` is session state: #108's gate reads the verification
+    # commands from here. Conventions are NOT injected into the system
+    # prompt — the model fetches AGENTS.md itself via the recipe's Step 0.
+    if agents_md is not None:
+        print(f"AGENTS:         {format_agents_summary(agents_md)}")
     print(f"Recipe:         {recipe_path}  ({recipe_title})")
     print(f"Model:          {model}")
     print(f"Params:         {params}")

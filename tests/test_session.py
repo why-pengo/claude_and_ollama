@@ -1,5 +1,7 @@
 """Unit tests for runner/session.py — extractors, salvage trigger, run_session loop."""
 
+from agents_md import ParsedAgentsMd, VerificationCommand
+
 import session
 from session import _extract_branch, _extract_issue_title, run_session
 
@@ -498,3 +500,55 @@ class TestRunSessionRepoPin:
         rc = self._runs(monkeypatch, tmp_path, scripted, dispatch)
         assert rc == 0
         assert dispatched == []
+
+
+# ---------------------------------------------------------------------------
+# run_session AGENTS.md session state — banner line + presence (#107)
+# ---------------------------------------------------------------------------
+
+
+class TestRunSessionAgentsBanner:
+    """agents_md rides into run_session as session state (#108's gate will
+    consume it); the observable behaviour today is the banner summary line."""
+
+    def _runs(self, monkeypatch, tmp_path, agents_md):
+        scripted = [
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        monkeypatch.setattr(session, "ollama_chat", _scripted_chat(scripted))
+        monkeypatch.setattr(session, "DISPATCH", _ok_dispatch())
+        monkeypatch.setattr(session, "attempt_salvage", lambda *a, **kw: None)
+        return run_session(
+            host="http://example",
+            model="m",
+            recipe_path=_minimal_recipe(tmp_path),
+            params={
+                "base_branch": "main",
+                "repo": "owner/repo",
+                "issue_number": "1",
+                "branch": "runner/issue-1-20260627-000000",
+            },
+            max_turns=5,
+            salvage_enabled=False,
+            turn_timeout=10.0,
+            agents_md=agents_md,
+        )
+
+    def test_banner_line_printed_when_agents_md_present(self, monkeypatch, tmp_path, capsys):
+        parsed = ParsedAgentsMd(
+            verification_commands=[
+                VerificationCommand(name="check", command="make check"),
+                VerificationCommand(name="test", command="make test"),
+            ],
+            conventions=["a", "b"],
+        )
+        rc = self._runs(monkeypatch, tmp_path, parsed)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "AGENTS:         verification=[check, test], 2 conventions" in out
+
+    def test_no_banner_line_without_agents_md(self, monkeypatch, tmp_path, capsys):
+        rc = self._runs(monkeypatch, tmp_path, None)
+        assert rc == 0
+        assert "AGENTS:" not in capsys.readouterr().out
