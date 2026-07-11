@@ -13,7 +13,7 @@
           {
             "type": "command",
             "if": "Bash(gh *)",
-            "command": "cmd=$(jq -r '.tool_input.command // \"\"' 2>/dev/null); case \"$cmd\" in \"gh issue close\"*|*\"&& gh issue close\"*|*\"; gh issue close\"*|*\"| gh issue close\"*) jq -nc '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"Never close issues directly — the merging PR closes them via Closes #N (keeps the audit trail). If the issue is PR-uncloseable, comment that it is safe to close and let Jon close it.\"}}' ;; esac",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"' 2>/dev/null); nl=$(printf '\\n.'); nl=${nl%.}; case \"$cmd\" in \"gh issue close\"*|*\"&& gh issue close\"*|*\"&&gh issue close\"*|*\"; gh issue close\"*|*\";gh issue close\"*|*\"| gh issue close\"*|*\"|gh issue close\"*|*\"${nl}gh issue close\"*) jq -nc '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"Never close issues directly — the merging PR closes them via Closes #N (keeps the audit trail). If the issue is PR-uncloseable, comment that it is safe to close and let Jon close it.\"}}' ;; esac",
             "timeout": 10
           },
           {
