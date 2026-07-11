@@ -81,8 +81,10 @@ steps:
       mandatory: open the PR. Your NEXT TOOL CALL must be
       `github__create_pull_request`. Title: match the issue title.
       Body must include `Closes #{{ issue_number }}`, `## Summary`,
-      `## Verification`, `## Subtasks`. Do not narrate. Do not summarize.
-      Call the tool.
+      `## Verification` (cite the gate's per-command results),
+      `## Subtasks`. If the call is rejected because verification is
+      failing, fix the failures and re-commit first. Do not narrate.
+      Do not summarize. Call the tool.
 
   - id: comment
     advances_on: [github__add_issue_comment]
@@ -137,6 +139,14 @@ prompt: |
   only tools that commit to the branch.** Nothing else lands code on
   the target repo.
 
+  **Prefer `github__push_files` for changes that need to land
+  together.** Each tool call is one commit, and the runner's
+  verification gate runs after every commit — if a multi-file change
+  lands in pieces (e.g. `test_x.py` before `x.py`), the gate may fail
+  on intermediate states you didn't intend to verify. Use
+  `github__create_or_update_file` only for genuinely standalone
+  single-file changes.
+
   Before overwriting an existing file in the target repo, fetch its
   current content first with `github__get_file_contents` — don't
   rewrite from memory.
@@ -145,26 +155,39 @@ prompt: |
     - Make the change via `github__push_files` or
       `github__create_or_update_file` with a conventional-commit
       message (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`).
-    - Verify it (run the test, build, or command the issue lists).
+    - The runner's gate verifies each commit for you — watch for its
+      feedback message and respond to it.
 
   Stop and comment if a subtask is ambiguous. If a subtask fails
   twice, stop and report — don't loop.
 
-  # Step 4 — Verify acceptance criteria
-  Run every observable check under Acceptance criteria. If any fail,
-  fix and re-verify before opening the PR.
+  # Step 4 — Respond to verification-gate feedback
+  You cannot run commands. The runner runs the target repo's
+  verification commands for you after every commit; when any fail,
+  the failures arrive as a message in your next turn — fix them and
+  re-commit. If the gate hasn't reported, the work isn't verified
+  yet. Never claim a check passed that the gate didn't report.
 
   # Step 5 — Open the PR
 
-  The moment your last file is pushed, call
-  `github__create_pull_request`. Title matches the issue title. Body,
-  in order:
+  The moment your last file is pushed and the gate is green, call
+  `github__create_pull_request`. The runner rejects this call while
+  the last gate run had any failure — if rejected, fix the failures,
+  re-commit, and only then retry. Title matches the issue title.
+  Body, in order:
 
     - `Closes #{{ issue_number }}`
     - `## Summary` — what changed, 2–4 bullets
-    - `## Verification` — each acceptance criterion and how you
-      confirmed it (use the "Honest verification" rule for anything
-      you couldn't run)
+    - `## Verification` — cite the runner gate's results by command
+      name, one line each, exactly this shape:
+
+          ## Verification
+          - `make check`: PASS (per runner gate)
+          - `make test`: PASS (per runner gate)
+
+      List the actual commands the gate reported (they come from the
+      target's AGENTS.md). Do not write freeform verification prose
+      and do not claim a check the gate didn't report.
     - `## Subtasks` — mirror of the issue checklist. Tick only items
       you actually executed
     - `## Follow-ups` (optional) — anything out of scope you noticed
@@ -174,6 +197,7 @@ prompt: |
   After `github__create_pull_request` returns, call
   `github__add_issue_comment` on #{{ issue_number }} with: status
   (✅ done | ⚠️ partial | ❌ blocked), link to the PR, anything
-  surprising.
+  surprising. Base the status on the gate: ✅ only if the last gate
+  run was green.
 
   Steps 5 and 6 are not optional if any files were pushed.
