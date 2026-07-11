@@ -266,16 +266,24 @@ class TestRestoreWorkspaceAfterGateMutations:
         )
         ws = tmp_path / "ws"
         subprocess.run(["git", "clone", str(remote), str(ws)], check=True, capture_output=True)
-        _git(["config", "user.email", "t@t"], ws)
-        _git(["config", "user.name", "t"], ws)
-        _git(["checkout", "-b", "main"], ws)
+        for args in (
+            ["config", "user.email", "t@t"],
+            ["config", "user.name", "t"],
+            ["checkout", "-b", "main"],
+        ):
+            rc, _, err = _git(args, ws)
+            assert rc == 0, f"setup `git {' '.join(args)}` failed: {err}"
         _commit(ws, "init")
-        _git(["push", "origin", "main"], ws)
+        rc, _, err = _git(["push", "origin", "main"], ws)
+        assert rc == 0, err
         # Session state: on a runner branch with a gate-artifact mutation.
-        _git(["checkout", "-b", "runner/issue-1-x"], ws)
+        rc, _, err = _git(["checkout", "-b", "runner/issue-1-x"], ws)
+        assert rc == 0, err
         (ws / "README.md").write_text("mutated by make format")
         restore_workspace(ws, "main")
-        rc, out, _ = _git(["rev-parse", "--abbrev-ref", "HEAD"], ws)
+        rc, out, err = _git(["rev-parse", "--abbrev-ref", "HEAD"], ws)
+        assert rc == 0, err
         assert out.strip() == "main"
-        rc, out, _ = _git(["status", "--porcelain"], ws)
+        rc, out, err = _git(["status", "--porcelain"], ws)
+        assert rc == 0, err
         assert out.strip() == ""
