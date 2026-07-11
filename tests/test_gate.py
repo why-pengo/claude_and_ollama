@@ -137,6 +137,15 @@ class TestRunGate:
             run_gate(rig["workspace"], "--upload-pack=evil", [])
         assert "unsafe" in str(excinfo.value)
 
+    def test_non_string_branch_raises_gate_error(self, rig):
+        # Model tool-call args are untrusted: branch can arrive as a number
+        # or null, and that must be a GateError (loud skip), not a TypeError
+        # crashing the session loop.
+        for bad in (42, None, ["runner/x"]):
+            with pytest.raises(GateError) as excinfo:
+                run_gate(rig["workspace"], bad, [])
+            assert "unsafe" in str(excinfo.value)
+
     def test_missing_remote_branch_raises(self, rig):
         with pytest.raises(GateError) as excinfo:
             run_gate(rig["workspace"], "no-such-branch", [])

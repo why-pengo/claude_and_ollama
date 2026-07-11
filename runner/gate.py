@@ -68,7 +68,10 @@ def run_gate(
     plain checkout would silently reuse the stale local branch left behind
     by the previous gate run and verify the wrong commit.
     """
-    if not _SAFE_BRANCH_RE.fullmatch(branch or ""):
+    # isinstance first: branch arrives from untrusted model tool-call args,
+    # and fullmatch() on a non-string raises TypeError — which the session
+    # loop doesn't catch. Everything unsafe must exit as GateError.
+    if not isinstance(branch, str) or not _SAFE_BRANCH_RE.fullmatch(branch):
         raise GateError(f"branch {branch!r} is unsafe to pass to git — gate cannot run")
     rc, _, err = _git(["fetch", "origin", branch], workspace_dir)
     if rc != 0:
