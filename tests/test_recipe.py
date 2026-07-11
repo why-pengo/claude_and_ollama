@@ -460,3 +460,65 @@ class TestRunnerDefaults:
             {"issue_number": "0", "repo": "x/y", "base_branch": "main", "branch": "b"},
         )
         assert opts.get("temperature") == 0.2
+
+
+class TestExecuteIssueRecipeGateAlignment:
+    """Pins the #110 gate-alignment text in execute-issue.yaml so
+    inadvertent recipe edits break CI. The recipe is the model's only
+    window onto the gate — if these regress, the model is back to being
+    told to run commands it can't run (the eval-35 fabrication trap)."""
+
+    def _load(self):
+        recipe_path = Path(run_recipe.__file__).resolve().parent.parent / (
+            "recipes/execute-issue.yaml"
+        )
+        prompt, _, steps, _ = load_recipe(
+            recipe_path,
+            {"issue_number": "0", "repo": "x/y", "base_branch": "main", "branch": "b"},
+        )
+        return prompt, steps
+
+    def test_step3_nudges_push_files_for_related_changes(self):
+        prompt, _ = self._load()
+        assert "Prefer `github__push_files` for changes that need to land" in prompt
+        # The reasoning must be visible to the model, not just the rule.
+        assert "Each tool call is one commit" in prompt
+        assert "intermediate states" in prompt
+
+    def test_step4_redirects_to_gate_feedback_not_manual_runs(self):
+        prompt, _ = self._load()
+        # The eval-35 fabrication trap: never again ask the model to run
+        # checks it has no shell for.
+        assert "Run every observable check" not in prompt
+        assert "You cannot run commands" in prompt
+        assert "the work isn't verified" in prompt
+
+    def test_step5_warns_pr_call_rejected_on_red_gate(self):
+        prompt, _ = self._load()
+        flat = " ".join(prompt.split())
+        assert "The runner rejects this call while the last gate run had any failure" in flat
+        assert "fix the failures, re-commit, and only then retry" in flat
+
+    def test_pr_body_verification_template_cites_gate(self):
+        prompt, _ = self._load()
+        assert "- `make check`: PASS (per runner gate)" in prompt
+        assert "- `make test`: PASS (per runner gate)" in prompt
+        assert "do not claim a check the gate didn't report" in prompt
+        # The example is indented in the prompt; the model must be told the
+        # real PR body starts at column 1 or GitHub renders a code block.
+        assert "no leading spaces" in prompt
+
+    def test_pr_step_nudge_mentions_gate_rejection(self):
+        _, steps = self._load()
+        pr_nudge = next(s["nudge"] for s in steps if s["id"] == "pr")
+        flat = " ".join(pr_nudge.split())
+        assert "rejected because verification is failing" in flat
+        assert "fix the failures and re-commit first" in flat
+
+    def test_comment_step_nudge_anchors_status_to_gate(self):
+        # The nudge arrives later than the Step 6 prose and is
+        # action-oriented, so it must carry the gate rule itself or it
+        # reintroduces ✅-on-red-gate statuses.
+        _, steps = self._load()
+        comment_nudge = next(s["nudge"] for s in steps if s["id"] == "comment")
+        assert "✅ only if the last gate run" in " ".join(comment_nudge.split())
