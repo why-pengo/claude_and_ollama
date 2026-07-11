@@ -118,6 +118,35 @@ def run_gate(
                 elapsed=time.monotonic() - start,
             )
         )
+    # Mutation detector (#154): a command that modifies tracked files makes
+    # the whole run untrustworthy — a formatter can "fix" the tree before
+    # later checks run, passing locally while the committed code stays
+    # broken (eval-38's false green on health_track's mutating `make
+    # check`). Untracked artifacts (.coverage, __pycache__, build output)
+    # are tolerated: they don't alter what the checks checked, and the
+    # pre-run reset doesn't remove them either.
+    rc, out, err = _git(["status", "--porcelain"], workspace_dir)
+    if rc != 0:
+        raise GateError(f"`git status` failed after verification commands: {err.strip()}")
+    mutated = [line for line in out.splitlines() if line.strip() and not line.startswith("??")]
+    if mutated:
+        results.append(
+            CommandResult(
+                name="workspace-mutation",
+                command="git status --porcelain (runner post-commands check)",
+                exit_code=1,
+                stdout=_cap("\n".join(mutated)),
+                stderr=_cap(
+                    "Verification commands modified tracked files, so the results "
+                    "above may not reflect the committed code (e.g. a formatter "
+                    "fixed the tree before lint ran). Re-committing cannot fix "
+                    "this: the target repo's AGENTS.md must list non-mutating "
+                    "commands (isort --check-only, black --check, ...) — see the "
+                    "schema's coverage-horizon guidance."
+                ),
+                elapsed=0.0,
+            )
+        )
     aggregate = "pass" if all(r.passed for r in results) else "fail"
     return GateResult(sha=sha, results=results, aggregate_status=aggregate, branch=branch)
 
