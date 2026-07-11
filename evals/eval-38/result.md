@@ -70,14 +70,24 @@ health_track, and a runner-side mutation detector (gate warns/reds when
 commands dirty the tree) in claude_and_ollama.
 
 ## Verdict
-Verdict: PASS (runner mechanics) — with the false-green finding above
-scoped to the target repo's command choice, not the pipeline.
+Verdict: PARTIAL
 
-Epic #111's acceptance criteria are met: gate-cited PR verification (no
+Every runner mechanism under test passed, and epic #111's acceptance
+criteria were each met as specified: gate-cited PR verification (no
 fabricated prose), no-AGENTS.md rejection (verified in #107's e2e and
 eval-37's pre-flight), red-gate feedback as user-role message (observed
 in both acceptance runs), `make ci` clean across all child PRs, and the
 rubric carries its superseded note.
+
+PARTIAL rather than PASS — held to eval-37's standard (run outcome, not
+mechanism outcome): the run's artifact (PR #101, closed unmerged) was
+blocked by the target's required CI check because the final gate green
+was unsound for `check` (post-run finding above), and it implemented
+1 of 6 subtasks — honestly declared in its `## Subtasks` section (the
+#110 "tick only what you executed" rule working), but the eval-35
+trailing-subtask dropout mode persists. The unqualified PASS is
+expected from eval-39 once #154 (gate mutation detector) and
+health_track#102 (check-only target) land.
 
 ## Next time
 - Surface green-gate results to the model (follow-up issue) so the PR
