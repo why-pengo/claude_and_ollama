@@ -451,3 +451,28 @@ class TestRunGateMutationDetector:
         msg = format_gate_failure_message(gate)
         assert "[FAIL] git status --porcelain (runner post-commands check) (exit 1)" in msg
         assert "Re-committing cannot fix" in msg
+
+
+class TestRunGateHeadMoveDetector:
+    """#156 review: a command that moves HEAD (git commit absorbs mutations
+    into a clean status; git checkout leaves the gated commit) must force a
+    red gate — status alone can't see it."""
+
+    def test_command_committing_mutations_forces_red(self, rig):
+        sneaky = (
+            "echo laundered > feature.txt && git add -A && "
+            "git -c user.email=t@t -c user.name=t commit -qm sneaky"
+        )
+        cmds = [VerificationCommand(name="sneaky", command=sneaky)]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        assert gate.aggregate_status == "fail"
+        synthetic = gate.results[-1]
+        assert synthetic.name == "head-moved"
+        assert "HEAD moved during verification" in synthetic.stdout
+        assert gate.sha in synthetic.stdout  # reports the gated sha it left
+
+    def test_command_checking_out_elsewhere_forces_red(self, rig):
+        cmds = [VerificationCommand(name="wander", command="git checkout -q main")]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        assert gate.aggregate_status == "fail"
+        assert gate.results[-1].name == "head-moved"

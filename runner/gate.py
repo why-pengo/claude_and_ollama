@@ -123,12 +123,16 @@ def run_gate(
     # later checks run, passing locally while the committed code stays
     # broken (eval-38's false green on health_track's mutating `make
     # check`). Untracked artifacts (.coverage, __pycache__, build output)
-    # are tolerated: they don't alter what the checks checked, and the
-    # pre-run reset doesn't remove them either.
-    rc, out, err = _git(["status", "--porcelain"], workspace_dir)
+    # are tolerated here: they don't alter what the checks checked, and the
+    # pre-run reset doesn't remove them either. Non-gitignored ones will
+    # surface at the NEXT session's workspace pre-flight (which requires a
+    # fully clean tree) — that's the right layer: the user decides whether
+    # to gitignore or remove them; the gate must not delete user-visible
+    # files.
+    rc, out, err = _git(["status", "--porcelain", "--untracked-files=no"], workspace_dir)
     if rc != 0:
         raise GateError(f"`git status` failed after verification commands: {err.strip()}")
-    mutated = [line for line in out.splitlines() if line.strip() and not line.startswith("??")]
+    mutated = [line for line in out.splitlines() if line.strip()]
     if mutated:
         results.append(
             CommandResult(
@@ -143,6 +147,30 @@ def run_gate(
                     "this: the target repo's AGENTS.md must list non-mutating "
                     "commands (isort --check-only, black --check, ...) — see the "
                     "schema's coverage-horizon guidance."
+                ),
+                elapsed=0.0,
+            )
+        )
+    # A command can also mutate git state itself (`git commit` absorbs the
+    # tree changes above into a clean status; `git checkout` moves away
+    # from the gated commit). Either way the results no longer describe
+    # the commit being gated, and GateResult.sha would lie.
+    rc, out, err = _git(["rev-parse", "HEAD"], workspace_dir)
+    if rc != 0:
+        raise GateError(f"could not re-read HEAD after verification commands: {err.strip()}")
+    head_after = out.strip()
+    if head_after != sha:
+        results.append(
+            CommandResult(
+                name="head-moved",
+                command="git rev-parse HEAD (runner post-commands check)",
+                exit_code=1,
+                stdout=f"HEAD moved during verification: {sha} -> {head_after}",
+                stderr=_cap(
+                    "A verification command moved HEAD (e.g. ran git commit or "
+                    "git checkout), so the results above may not describe the "
+                    "gated commit. Verification commands must not change git "
+                    "state — fix the target repo's AGENTS.md command list."
                 ),
                 elapsed=0.0,
             )
