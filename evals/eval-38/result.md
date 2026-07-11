@@ -15,8 +15,10 @@ Turn-by-turn: AGENTS.md pre-flight → issue read → branch → commit №1 →
 failure fed back → commit №2 → **gate green (2/2)** — the #150 fix held:
 the second gate run survived `make format`'s workspace mutation that
 wedged eval-37 → PR opened → issue comment → clean completion at
-**turn 9** (inside eval-35's 8–10 turn band; the gate added ~72s of
-wall time across two runs).
+**turn 9** (inside eval-35's 8–10 turn band). The two gate runs cost
+~71s of command runtime (2× `make test` at ~35s plus 2× `make check`)
+— real elapsed time between turns, not counted in the session's
+`wall=28.8s` metric, which sums model-side inference only.
 
 - **PR health_track#101's `## Verification` block is gate-cited in the
   #110 template shape** — `- \`make check\`: FAIL (per runner gate)` /
@@ -43,10 +45,14 @@ results needs the runner to surface them. Filed as a follow-up issue
 - **100% prose-rescue rate again** (8/8 tool calls) — consistent with
   eval-37. The prose-rescue mechanism is carrying every run now; worth
   its own investigation.
-- The model called `create_pull_request` twice back-to-back; only #101
-  exists, so the second call presumably errored (already exists) and the
-  model recovered by moving to the comment. Tool results aren't logged
-  to session.log — a log-surface gap worth noting for future forensics.
+- The model called `create_pull_request` twice back-to-back. What the
+  log shows: the first call's logged args omit `head`/`base`, the
+  second's include them, and exactly one PR (#101) exists. Consistent
+  with the first call failing API-side on missing parameters and the
+  model self-correcting — but tool results aren't logged to
+  session.log, so the first call's actual failure mode isn't
+  recoverable from the artifact. That log-surface gap is worth noting
+  for future forensics.
 
 ## Verdict
 Verdict: PASS
