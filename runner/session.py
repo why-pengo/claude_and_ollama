@@ -23,7 +23,15 @@ from pathlib import Path
 
 import httpx
 from agents_md import ParsedAgentsMd, format_agents_summary
-from gate import GateError, GateResult, format_gate_block, run_gate
+from gate import (
+    GateError,
+    GateResult,
+    format_gate_block,
+    format_gate_failure_message,
+    format_pr_block_error,
+    format_salvage_verification,
+    run_gate,
+)
 
 from ollama_client import (
     extract_turn_metrics,
@@ -95,10 +103,19 @@ def _extract_issue_title(messages: list) -> str | None:
     return None
 
 
-def attempt_salvage(messages: list, params: dict, succeeded: set[str]) -> dict | None:
+def attempt_salvage(
+    messages: list,
+    params: dict,
+    succeeded: set[str],
+    gate_state: list[GateResult] | None = None,
+) -> dict | None:
     """
     Open a mechanical PR if the model committed work but never called
     `create_pull_request`. Print a clear marker for eval-log scanning.
+
+    Salvage never runs the gate (doing the work twice defeats the
+    emergency-path purpose) but surfaces the last recorded gate result in
+    the PR body's `## Verification` block so the reviewer sees it (#109).
 
     Returns the salvage_pr result dict, or None if salvage was skipped
     (model already opened the PR, or session lacks the state needed).
@@ -125,7 +142,14 @@ def attempt_salvage(messages: list, params: dict, succeeded: set[str]) -> dict |
         return None
 
     print(f"\n=== Salvage attempt: branch={branch} → base={base_branch} ===")
-    result = salvage_pr(repo, branch, base_branch, issue_number, issue_title)
+    result = salvage_pr(
+        repo,
+        branch,
+        base_branch,
+        issue_number,
+        issue_title,
+        verification_block=format_salvage_verification(gate_state[-1] if gate_state else None),
+    )
     print(f"  {format_salvage_status(result, branch, base_branch)}")
 
     # 'opened' has a follow-up the formatter can't express: post the Step 6
@@ -249,6 +273,11 @@ def run_session(
 
             if tool_calls:
                 empty_turn_count = 0
+                # Set when a gate run this turn came back red; appended as a
+                # user-role message after the turn's calls so the model's
+                # next turn opens with the complete failure picture (#109).
+                # A later green gate in the same turn clears it.
+                gate_feedback: str | None = None
                 for tc in tool_calls:
                     fn_name = tc["function"]["name"]
                     try:
@@ -268,12 +297,26 @@ def run_session(
                     # subprocess spawns. main() guarantees `repo` is set;
                     # an empty pin (direct run_session callers) skips the check.
                     pin_err = repo_pin_error(args_dict, pinned_repo) if pinned_repo else None
+                    # PR-open block (#109): create_pull_request is refused
+                    # while the last recorded gate run had any failure. The
+                    # ERROR result never reaches `succeeded`, so recipe_done
+                    # can't fire off a blocked call.
+                    gate_block_err = (
+                        format_pr_block_error(gate_state[-1])
+                        if fn_name == "github__create_pull_request"
+                        and gate_state
+                        and gate_state[-1].aggregate_status == "fail"
+                        else None
+                    )
                     if impl is None:
                         result = (
                             f"ERROR: unknown tool {fn_name}. Available: {sorted(DISPATCH.keys())}"
                         )
                     elif pin_err is not None:
                         result = pin_err
+                    elif gate_block_err is not None:
+                        result = gate_block_err
+                        print("  [runner: create_pull_request blocked — last gate red]")
                     else:
                         try:
                             result = impl(args_dict)
@@ -313,6 +356,14 @@ def run_session(
                                 gate_state.append(gate_result)
                                 block = format_gate_block(gate_result)
                                 print("\n".join(f"  {line}" for line in block.splitlines()))
+                                gate_feedback = (
+                                    format_gate_failure_message(gate_result)
+                                    if gate_result.aggregate_status == "fail"
+                                    else None
+                                )
+                if gate_feedback is not None:
+                    messages.append({"role": "user", "content": gate_feedback})
+                    print("  [runner: gate red — feeding failure back to the model]")
                 if recipe_done(succeeded):
                     print(f"\n=== Recipe complete: PR + issue comment both fired (turn {turn}) ===")
                     print(format_session_metrics_summary(turn_metrics))
@@ -329,7 +380,7 @@ def run_session(
                     print(f"\n=== 3 consecutive no-tool-call turns; giving up (turn {turn}) ===")
                     print(format_session_metrics_summary(turn_metrics))
                     if salvage_enabled:
-                        attempt_salvage(messages, params, succeeded)
+                        attempt_salvage(messages, params, succeeded, gate_state)
                     return 2
 
                 if recipe_done(succeeded):
@@ -337,7 +388,13 @@ def run_session(
                     print(format_session_metrics_summary(turn_metrics))
                     return 0
 
-                next_prompt = step_aware_continue_prompt(succeeded, recipe_steps)
+                # A red last gate outranks the step-aware nudge: the most
+                # useful thing a stalled model can hear is the failure it
+                # has to fix (#109).
+                if gate_state and gate_state[-1].aggregate_status == "fail":
+                    next_prompt = format_gate_failure_message(gate_state[-1])
+                else:
+                    next_prompt = step_aware_continue_prompt(succeeded, recipe_steps)
                 print(f'  [runner: nudging — "{next_prompt[:80]}..."]\n')
                 messages.append({"role": "user", "content": next_prompt})
 
@@ -359,11 +416,11 @@ def run_session(
                         )
                         print(format_session_metrics_summary(turn_metrics))
                         if salvage_enabled:
-                            attempt_salvage(messages, params, succeeded)
+                            attempt_salvage(messages, params, succeeded, gate_state)
                         return 4
 
     print(f"\n=== Hit max_turns ({max_turns}); giving up ===")
     print(format_session_metrics_summary(turn_metrics))
     if salvage_enabled:
-        attempt_salvage(messages, params, succeeded)
+        attempt_salvage(messages, params, succeeded, gate_state)
     return 3

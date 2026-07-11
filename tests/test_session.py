@@ -738,3 +738,218 @@ class TestRunSessionGateWiring:
         ]
         assert self._runs(monkeypatch, tmp_path, scripted, fake) == 0
         assert calls == ["runner/issue-1-20260627-000000"]
+
+
+# ---------------------------------------------------------------------------
+# run_session gate-failure feedback + PR-open block + salvage state (#109)
+# ---------------------------------------------------------------------------
+
+
+def _red_gate(sha="b" * 40):
+    return GateResult(
+        sha=sha,
+        results=[
+            CommandResult(
+                name="check",
+                command="make check",
+                exit_code=1,
+                stdout="lint exploded",
+                stderr="",
+                elapsed=1.0,
+            )
+        ],
+        aggregate_status="fail",
+    )
+
+
+def _green_gate(sha="c" * 40):
+    return GateResult(
+        sha=sha,
+        results=[
+            CommandResult(
+                name="check",
+                command="make check",
+                exit_code=0,
+                stdout="",
+                stderr="",
+                elapsed=1.0,
+            )
+        ],
+        aggregate_status="pass",
+    )
+
+
+def _capturing_chat(scripted, seen):
+    """Like _scripted_chat, but records a snapshot of `messages` per call so
+    tests can assert what the model would see on its next turn."""
+    queue = list(scripted)
+
+    def fake_chat(client, host, model, messages, tool_schemas, options=None):
+        seen.append([dict(m) for m in messages])
+        if not queue:
+            raise AssertionError("ollama_chat called past end of scripted responses")
+        return {"message": queue.pop(0), "done_reason": "stop"}
+
+    return fake_chat
+
+
+class TestRunSessionGateFeedback:
+    def _agents(self):
+        return ParsedAgentsMd(
+            verification_commands=[VerificationCommand(name="check", command="make check")],
+            conventions=[],
+        )
+
+    def _commit_msg(self):
+        return _tool_call_msg(
+            "github__create_or_update_file",
+            {"branch": "runner/issue-1-x", "path": "f.py", "content": "c"},
+        )
+
+    def _runs(
+        self,
+        monkeypatch,
+        tmp_path,
+        scripted,
+        gate_results,
+        seen=None,
+        dispatch=None,
+        salvage=None,
+        **kwargs,
+    ):
+        """gate_results: queue of GateResult (or callables/exceptions) that
+        successive run_gate calls pop from; repeats the last one when empty."""
+        queue = list(gate_results)
+
+        def fake_run_gate(ws, branch, cmds):
+            result = queue.pop(0) if len(queue) > 1 else queue[0]
+            return result
+
+        chat = _capturing_chat(scripted, seen) if seen is not None else _scripted_chat(scripted)
+        monkeypatch.setattr(session, "ollama_chat", chat)
+        monkeypatch.setattr(session, "DISPATCH", dispatch or _ok_dispatch())
+        monkeypatch.setattr(session, "attempt_salvage", salvage or (lambda *a, **kw: None))
+        monkeypatch.setattr(session, "run_gate", fake_run_gate)
+        return run_session(
+            host="http://example",
+            model="m",
+            recipe_path=_minimal_recipe(tmp_path),
+            params={
+                "base_branch": "main",
+                "repo": "owner/repo",
+                "issue_number": "1",
+                "branch": "runner/issue-1-20260627-000000",
+            },
+            max_turns=kwargs.get("max_turns", 10),
+            salvage_enabled=kwargs.get("salvage_enabled", False),
+            turn_timeout=10.0,
+            loop_detect_threshold=kwargs.get("loop_detect_threshold", 4),
+            workspace_dir=tmp_path,
+            agents_md=self._agents(),
+        )
+
+    def test_red_gate_feeds_failure_back_as_user_message(self, monkeypatch, tmp_path, capsys):
+        seen = []
+        scripted = [
+            self._commit_msg(),
+            _prose_msg("done"),
+            _prose_msg("done"),
+            _prose_msg("done"),
+        ]
+        rc = self._runs(monkeypatch, tmp_path, scripted, [_red_gate()], seen=seen)
+        assert rc == 2  # gave up after prose turns; salvage disabled
+        # The call after the red-gate turn opens with the failure message
+        # as the newest user-role message.
+        after_commit = seen[1]
+        assert after_commit[-1]["role"] == "user"
+        assert "Verification failed after your last commit." in after_commit[-1]["content"]
+        assert "[FAIL] make check (exit 1)" in after_commit[-1]["content"]
+        assert "lint exploded" in after_commit[-1]["content"]
+        assert "[runner: gate red — feeding failure back to the model]" in capsys.readouterr().out
+
+    def test_green_gate_appends_no_feedback(self, monkeypatch, tmp_path, seen=None):
+        seen = []
+        scripted = [
+            self._commit_msg(),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        rc = self._runs(monkeypatch, tmp_path, scripted, [_green_gate()], seen=seen)
+        assert rc == 0
+        after_commit = seen[1]
+        assert after_commit[-1]["role"] == "tool"  # no injected user message
+
+    def test_pr_blocked_while_red_then_allowed_after_green(self, monkeypatch, tmp_path, capsys):
+        pr_impl_calls = []
+        dispatch = _ok_dispatch()
+        dispatch["github__create_pull_request"] = lambda args: pr_impl_calls.append(args) or "OK"
+        scripted = [
+            self._commit_msg(),  # gate red
+            _tool_call_msg("github__create_pull_request", {}),  # blocked
+            self._commit_msg(),  # gate green
+            _tool_call_msg("github__create_pull_request", {}),  # allowed
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        rc = self._runs(
+            monkeypatch, tmp_path, scripted, [_red_gate(), _green_gate()], dispatch=dispatch
+        )
+        assert rc == 0
+        # The blocked call never reached the tool implementation.
+        assert len(pr_impl_calls) == 1
+        out = capsys.readouterr().out
+        assert "[runner: create_pull_request blocked — last gate red]" in out
+
+    def test_prose_nudge_is_failure_message_while_red(self, monkeypatch, tmp_path, seen=None):
+        seen = []
+        scripted = [
+            self._commit_msg(),  # gate red
+            _prose_msg("hmm"),  # nudge should be the failure message
+            _prose_msg("hmm"),
+            _prose_msg("hmm"),
+        ]
+        rc = self._runs(monkeypatch, tmp_path, scripted, [_red_gate()], seen=seen)
+        assert rc == 2
+        # Third call = after commit turn + one prose turn: last user message
+        # is the failure feedback again (not the step-aware nudge).
+        assert "Verification failed after your last commit." in seen[2][-1]["content"]
+
+    def test_stuck_on_same_failing_commit_trips_loop_detect(self, monkeypatch, tmp_path):
+        # Identical failing commits: the first grows `succeeded` (set-add),
+        # so turns 2+ accumulate the same signature and trip at threshold.
+        scripted = [self._commit_msg() for _ in range(6)]
+        rc = self._runs(monkeypatch, tmp_path, scripted, [_red_gate()], loop_detect_threshold=4)
+        assert rc == 4
+
+    def test_signature_stable_across_reruns_of_same_failure(self):
+        import copy
+
+        from prose_rescue import turn_signature
+
+        msg = self._commit_msg()
+        assert turn_signature(msg) == turn_signature(copy.deepcopy(msg))
+
+    def test_salvage_receives_gate_state(self, monkeypatch, tmp_path):
+        salvage_calls = []
+
+        def fake_salvage(messages, params, succeeded, gate_state=None):
+            salvage_calls.append(gate_state)
+            return None
+
+        scripted = [
+            self._commit_msg(),  # gate red
+            _prose_msg("done"),
+            _prose_msg("done"),
+            _prose_msg("done"),
+        ]
+        rc = self._runs(
+            monkeypatch,
+            tmp_path,
+            scripted,
+            [_red_gate()],
+            salvage=fake_salvage,
+            salvage_enabled=True,
+        )
+        assert rc == 2
+        assert len(salvage_calls) == 1
+        assert salvage_calls[0] is not None
+        assert salvage_calls[0][-1].aggregate_status == "fail"

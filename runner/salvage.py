@@ -71,9 +71,15 @@ def salvage_pr(
     base_branch: str,
     issue_number: int,
     issue_title: str,
+    verification_block: str | None = None,
 ) -> dict:
     """
     Open a mechanical PR from a branch with commits but no PR.
+
+    `verification_block` fills the PR body's `## Verification` section —
+    the caller renders it from the session's last gate result (#109) so
+    this module stays free of gate knowledge. None falls back to the
+    pre-gate wording.
 
     Always returns a dict with `status`. Caller can branch on it.
 
@@ -96,6 +102,10 @@ def salvage_pr(
         return {"status": "no_commits"}
 
     commit_lines = "\n".join(f"- {c}" for c in commits)
+    verification = verification_block or (
+        "Not executed by the model. Reviewer should run the issue's "
+        "acceptance criteria manually before merging."
+    )
     body = (
         f"Closes #{issue_number}\n\n"
         f"## Summary\n"
@@ -106,8 +116,7 @@ def salvage_pr(
         f"## Commits on this branch\n"
         f"{commit_lines}\n\n"
         f"## Verification\n"
-        f"Not executed by the model. Reviewer should run the issue's "
-        f"acceptance criteria manually before merging.\n\n"
+        f"{verification}\n\n"
         f"## Subtasks\n"
         f"Mirror from issue #{issue_number}. None auto-ticked — verify "
         f"each before merging.\n\n"
