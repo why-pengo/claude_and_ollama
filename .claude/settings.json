@@ -7,8 +7,20 @@
           {
             "type": "command",
             "if": "Bash(git commit *)",
-            "command": "cmd=$(jq -r '.tool_input.command // \"\"' 2>/dev/null); case \"$cmd\" in *\"git commit \"*|*\"git commit\") cd \"$(git rev-parse --show-toplevel)\" && make check >&2 || jq -nc '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"make check failed — fix format/lint issues before committing (make ci adds the test suite).\"}}' ;; esac",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"' 2>/dev/null); case \"$cmd\" in *\"git commit \"*|*\"git commit\") top=$(git rev-parse --show-toplevel) && cd \"$top\" || exit 0; if [ \"$(git rev-parse --abbrev-ref HEAD)\" = \"main\" ]; then jq -nc '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"On main — branch protection rejects the push and the commit would need surgery to move. Create a feature/fix/docs/runner branch first.\"}}'; else make check >&2 || jq -nc '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"make check failed — fix format/lint issues before committing (make ci adds the test suite).\"}}'; fi ;; esac",
             "timeout": 120
+          },
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"' 2>/dev/null); nl=$(printf '\\n.'); nl=${nl%.}; case \"$cmd\" in \"gh issue close\"*|*\"&& gh issue close\"*|*\"&&gh issue close\"*|*\"; gh issue close\"*|*\";gh issue close\"*|*\"| gh issue close\"*|*\"|gh issue close\"*|*\"${nl}gh issue close\"*) jq -nc '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"Never close issues directly — the merging PR closes them via Closes #N (keeps the audit trail). If the issue is PR-uncloseable, comment that it is safe to close and let Jon close it.\"}}' ;; esac",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "if": "Bash(gh issue edit*)",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"' 2>/dev/null); case \"$cmd\" in *\"--add-label\"*\"ready-for-execution\"*|*\"ready-for-execution\"*\"--add-label\"*) jq -nc '{hookSpecificOutput:{hookEventName:\"PreToolUse\",additionalContext:\"ready-for-execution is being applied: re-verify every file/line pointer in the issue Context and Subtasks against the current code first — pointers verified at authoring time go stale (see the #107 incident, 2026-07-11). The runner cannot grep; wrong pointers strand it.\"}}' ;; esac",
+            "timeout": 10
           }
         ]
       }
