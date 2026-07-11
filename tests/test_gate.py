@@ -385,7 +385,10 @@ class TestRunGateMutatingCommands:
             VerificationCommand(name="check", command="true"),
         ]
         first = run_gate(rig["workspace"], BRANCH, cmds)
-        assert first.aggregate_status == "pass"
+        # Since #154 a mutating command is itself a red gate; this test's
+        # concern is only that the mutation can't WEDGE the next run.
+        assert first.aggregate_status == "fail"
+        assert first.results[-1].name == "workspace-mutation"
         # Tree is now dirty — before the fix, this second run raised
         # GateError ("local changes would be overwritten by checkout").
         sha2 = _commit(rig["publisher"], "feature.txt", "v2", "next commit")
@@ -393,7 +396,7 @@ class TestRunGateMutatingCommands:
         assert rc == 0, err
         second = run_gate(rig["workspace"], BRANCH, cmds)
         assert second.sha == sha2
-        assert second.aggregate_status == "pass"
+        assert [r.exit_code for r in second.results[:2]] == [0, 0]
 
     def test_mutations_discarded_not_carried_into_next_run(self, rig):
         # The reset must discard the mutation so commands run against the
@@ -405,3 +408,71 @@ class TestRunGateMutatingCommands:
         ]
         gate = run_gate(rig["workspace"], BRANCH, verify)
         assert gate.aggregate_status == "pass"
+
+
+class TestRunGateMutationDetector:
+    """#154, from eval-38's false green: a command that modifies tracked
+    files must force a red gate; untracked artifacts are tolerated."""
+
+    def test_tracked_file_mutation_forces_red(self, rig):
+        cmds = [
+            VerificationCommand(name="format", command="echo fixed > feature.txt"),
+            VerificationCommand(name="lint", command="true"),
+        ]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        assert gate.aggregate_status == "fail"
+        synthetic = gate.results[-1]
+        assert synthetic.name == "workspace-mutation"
+        assert not synthetic.passed
+        assert "feature.txt" in synthetic.stdout
+        assert "non-mutating" in synthetic.stderr
+        # The real commands' results are still all present ahead of it.
+        assert [r.name for r in gate.results] == ["format", "lint", "workspace-mutation"]
+
+    def test_untracked_artifacts_tolerated(self, rig):
+        cmds = [
+            VerificationCommand(name="test", command="touch coverage-artifact.txt"),
+            VerificationCommand(name="check", command="true"),
+        ]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        assert gate.aggregate_status == "pass"
+        assert [r.name for r in gate.results] == ["test", "check"]
+
+    def test_clean_commands_add_no_synthetic_result(self, rig):
+        cmds = [VerificationCommand(name="check", command="true")]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        assert gate.aggregate_status == "pass"
+        assert len(gate.results) == 1
+
+    def test_mutation_failure_reads_sensibly_in_feedback(self, rig):
+        # The synthetic result flows through the #109 failure formatter.
+        cmds = [VerificationCommand(name="format", command="echo fixed > feature.txt")]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        msg = format_gate_failure_message(gate)
+        assert "[FAIL] git status --porcelain (runner post-commands check) (exit 1)" in msg
+        assert "Re-committing cannot fix" in msg
+
+
+class TestRunGateHeadMoveDetector:
+    """#156 review: a command that moves HEAD (git commit absorbs mutations
+    into a clean status; git checkout leaves the gated commit) must force a
+    red gate — status alone can't see it."""
+
+    def test_command_committing_mutations_forces_red(self, rig):
+        sneaky = (
+            "echo laundered > feature.txt && git add -A && "
+            "git -c user.email=t@t -c user.name=t commit -qm sneaky"
+        )
+        cmds = [VerificationCommand(name="sneaky", command=sneaky)]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        assert gate.aggregate_status == "fail"
+        synthetic = gate.results[-1]
+        assert synthetic.name == "head-moved"
+        assert "HEAD moved during verification" in synthetic.stdout
+        assert gate.sha in synthetic.stdout  # reports the gated sha it left
+
+    def test_command_checking_out_elsewhere_forces_red(self, rig):
+        cmds = [VerificationCommand(name="wander", command="git checkout -q main")]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        assert gate.aggregate_status == "fail"
+        assert gate.results[-1].name == "head-moved"
