@@ -93,7 +93,8 @@ steps:
       `github__create_pull_request` has fired. The recipe's Step 6 is now
       mandatory. Your NEXT TOOL CALL must be `github__add_issue_comment`
       on issue #{{ issue_number }} with the PR link and a status line
-      (✅ done | ⚠️ partial | ❌ blocked). Do not narrate. Call the tool.
+      (✅ done | ⚠️ partial | ❌ blocked — ✅ only if the last gate run
+      was green). Do not narrate. Call the tool.
 
 prompt: |
   You are executing GitHub issue #{{ issue_number }} in {{ repo }}.
@@ -179,7 +180,10 @@ prompt: |
     - `Closes #{{ issue_number }}`
     - `## Summary` — what changed, 2–4 bullets
     - `## Verification` — cite the runner gate's results by command
-      name, one line each, exactly this shape:
+      name, one line each, exactly this shape (the example below is
+      indented for readability — in the PR body itself start every
+      line at column 1, no leading spaces, or GitHub renders it as a
+      code block):
 
           ## Verification
           - `make check`: PASS (per runner gate)

@@ -504,6 +504,9 @@ class TestExecuteIssueRecipeGateAlignment:
         assert "- `make check`: PASS (per runner gate)" in prompt
         assert "- `make test`: PASS (per runner gate)" in prompt
         assert "do not claim a check the gate didn't report" in prompt
+        # The example is indented in the prompt; the model must be told the
+        # real PR body starts at column 1 or GitHub renders a code block.
+        assert "no leading spaces" in prompt
 
     def test_pr_step_nudge_mentions_gate_rejection(self):
         _, steps = self._load()
@@ -511,3 +514,11 @@ class TestExecuteIssueRecipeGateAlignment:
         flat = " ".join(pr_nudge.split())
         assert "rejected because verification is failing" in flat
         assert "fix the failures and re-commit first" in flat
+
+    def test_comment_step_nudge_anchors_status_to_gate(self):
+        # The nudge arrives later than the Step 6 prose and is
+        # action-oriented, so it must carry the gate rule itself or it
+        # reintroduces ✅-on-red-gate statuses.
+        _, steps = self._load()
+        comment_nudge = next(s["nudge"] for s in steps if s["id"] == "comment")
+        assert "✅ only if the last gate run" in " ".join(comment_nudge.split())
