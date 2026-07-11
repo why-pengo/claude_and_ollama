@@ -54,8 +54,24 @@ results needs the runner to surface them. Filed as a follow-up issue
   recoverable from the artifact. That log-surface gap is worth noting
   for future forensics.
 
+## Post-run finding: the green gate was a false green
+
+Merging PR #101 surfaced it: the required CI check fails on
+`isort --check-only` for the very file the gate passed. health_track's
+`make check` runs `make format` (mutating) before flake8 — so the gate's
+workspace got silently *fixed*, lint passed on the fixed tree, and the
+gate reported green while the **committed** code still carried the
+violation. The #150 reset then correctly discarded the fix. The runner
+executed its contract faithfully; the defect is in the target's command
+choice — a self-healing command cannot gate committed state. This is the
+schema's "coverage horizon / the author owns the gate's reach" clause in
+action. Fixes filed: a check-only target + AGENTS.md swap in
+health_track, and a runner-side mutation detector (gate warns/reds when
+commands dirty the tree) in claude_and_ollama.
+
 ## Verdict
-Verdict: PASS
+Verdict: PASS (runner mechanics) — with the false-green finding above
+scoped to the target repo's command choice, not the pipeline.
 
 Epic #111's acceptance criteria are met: gate-cited PR verification (no
 fabricated prose), no-AGENTS.md rejection (verified in #107's e2e and
