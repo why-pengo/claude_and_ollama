@@ -78,12 +78,14 @@ behavior the runner gate needs.
 
 ### `## Verification commands`
 
-A YAML list of objects. Each object has exactly two string keys:
+A YAML list of objects. Each object has two required string keys
+(`name`, `command`) and one optional string key (`fix`):
 
 | Key | Type | Description |
 |---|---|---|
 | `name` | string | Short identifier the runner uses to report results (e.g. `check`, `test`, `ci`). Required. Must be unique within the file. |
 | `command` | string | The shell command to invoke from the repo root. Required. Must be non-empty. |
+| `fix` | string | Optional mechanical remediation ([ADR-0009](https://github.com/why-pengo/claude_and_ollama/blob/main/docs/adr/0009-mechanical-remediation-over-model-effort.md)). When `command` fails at the gate, the runner runs `fix` in the workspace and commits any resulting tracked-file modifications itself (attributed `style: mechanical remediation by runner (...)`), then re-runs the gate exactly once. Declare it only for deterministic fixers (`make format`); the runner never guesses. Must be non-empty when present. |
 
 The runner executes each command in order in the user-provided workspace
 after every commit. A non-zero exit on any command means the gate is red

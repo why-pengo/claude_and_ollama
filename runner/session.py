@@ -24,6 +24,7 @@ from pathlib import Path
 import httpx
 from agents_md import ParsedAgentsMd, format_agents_summary
 from gate import (
+    REMEDIATION_NO_FIXES,
     GateError,
     GateResult,
     format_gate_block,
@@ -31,6 +32,7 @@ from gate import (
     format_pr_block_error,
     format_salvage_verification,
     run_gate,
+    run_remediation,
 )
 
 from ollama_client import (
@@ -57,6 +59,56 @@ SYSTEM_PROMPT_PATH = REPO_ROOT / "prompts" / "system-prompt.md"
 # so each triggers a post-commit gate run (#108). Read-only tools, branch
 # creation, PR, and comment calls never trigger the gate.
 GATED_TOOLS = frozenset({"github__create_or_update_file", "github__push_files"})
+
+
+def _gate_with_remediation(
+    workspace_dir: Path,
+    gate_branch: str,
+    agents_md: ParsedAgentsMd,
+    repo: str,
+) -> list[GateResult]:
+    """Run the gate; on red, attempt one mechanical remediation (ADR-0009).
+
+    Returns the gate results to record, oldest first (one, or two when a
+    remediation commit landed and the gate re-ran). Deterministic fixes are
+    the runner's job — the fix's changed files are committed through the
+    same GitHub-API path the model uses, with attribution, and the gate
+    re-runs exactly once. A fix that changes nothing (or produces anything
+    beyond tracked-file modifications) falls back to model feedback.
+    """
+    gate_result = run_gate(workspace_dir, gate_branch, agents_md.verification_commands)
+    if gate_result.aggregate_status == "pass":
+        return [gate_result]
+
+    remediation = run_remediation(workspace_dir, gate_result)
+    if not remediation.changed_files:
+        if remediation.notes != REMEDIATION_NO_FIXES:
+            print(f"  [gate: remediation] {remediation.notes}")
+        return [gate_result]
+
+    print(
+        f"  [gate: remediation] {remediation.notes} — committing mechanically "
+        f"({', '.join(sorted(remediation.changed_files))})"
+    )
+    owner, _, repo_name = repo.partition("/")
+    push_result = DISPATCH["github__push_files"](
+        {
+            "owner": owner,
+            "repo": repo_name,
+            "branch": gate_branch,
+            "files": [
+                {"path": path, "content": content}
+                for path, content in sorted(remediation.changed_files.items())
+            ],
+            "message": f"style: mechanical remediation by runner ({', '.join(remediation.fixes_run)})",
+        }
+    )
+    if not _tool_result_succeeded(push_result):
+        print(f"  [gate: remediation] commit failed — {push_result[:200]}")
+        return [gate_result]
+    print("  [gate: remediation] committed — re-running gate once")
+    second = run_gate(workspace_dir, gate_branch, agents_md.verification_commands)
+    return [gate_result, second]
 
 
 def _pr_gate_error(args_dict: dict, params: dict, gate_state: list[GateResult]) -> str | None:
@@ -377,10 +429,11 @@ def run_session(
                         ):
                             gate_branch = args_dict.get("branch") or params.get("branch", "")
                             try:
-                                gate_result = run_gate(
+                                new_results = _gate_with_remediation(
                                     workspace_dir,
                                     gate_branch,
-                                    agents_md.verification_commands,
+                                    agents_md,
+                                    pinned_repo,
                                 )
                             except GateError as e:
                                 # Environment problem, not a red gate — skip
@@ -388,12 +441,13 @@ def run_session(
                                 # model's code didn't cause.
                                 print(f"  [gate] ERROR: {e} — gate skipped for this commit")
                             else:
-                                gate_state.append(gate_result)
-                                block = format_gate_block(gate_result)
-                                print("\n".join(f"  {line}" for line in block.splitlines()))
+                                gate_state.extend(new_results)
+                                for gr in new_results:
+                                    block = format_gate_block(gr)
+                                    print("\n".join(f"  {line}" for line in block.splitlines()))
                                 gate_feedback = (
-                                    format_gate_failure_message(gate_result)
-                                    if gate_result.aggregate_status == "fail"
+                                    format_gate_failure_message(gate_state[-1])
+                                    if gate_state[-1].aggregate_status == "fail"
                                     else None
                                 )
                 if gate_feedback is not None:
