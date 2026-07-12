@@ -43,6 +43,12 @@ Anything the runner can't infer from the codebase:
 - Decisions already made (and why)
 - External docs
 
+Keep human-facing rationale out of runner-task bodies. "Decisions
+(locked)" style sections belong in the epic or an issue comment; the
+body stays Goal / Context-pointers / Subtasks / Acceptance /
+Out-of-scope. Every word of body is prompt-token cost the model pays
+on every turn.
+
 ### 4. Subtasks
 
 A GitHub checklist. Each item must be:
@@ -50,19 +56,43 @@ A GitHub checklist. Each item must be:
 - **One concrete change** — one file, one command, one verification
 - **Independently verifiable**
 - **Ordered** — earlier items unblock later ones
+- **Named by exact file path(s)** — the runner's model cannot
+  search; it fetches only the paths it is given.
+  `backend/app/routers/hydration.py`, not "the hydration router".
 
-If you have more than ~8 subtasks, the issue is probably too big.
-Split it into an epic + children.
+**Sizing — hard ceilings** (calibrated on eval-35..41; above any
+one of them, split into an epic + children):
+
+- **≤ 5 subtasks**
+- **≤ ~5 files touched**
+- **body ≤ ~500 words**
+
+The unit of a runner-task issue is **one gate-visible increment**:
+while the issue is incomplete, at least one AGENTS.md verification
+command must fail. Concretely, **tests land in the same issue as the
+behavior they verify** — an implementation issue without its tests
+lets the model open an honest-but-partial PR on a green gate
+(eval-41, health_track#110).
+
+**Ordering:** the model drops trailing subtasks (eval-35: all three
+PASS runs silently omitted the final wiring step). Where dependency
+order allows, order by importance — registration/wiring before
+polish; the subtask that would hurt most if dropped goes as early as
+dependencies permit.
 
 ### 5. Acceptance criteria
 
-Bulleted list of **observable outcomes**:
+Bulleted list of **observable outcomes**, each checkable by a
+command the verification gate runs (the target repo's `AGENTS.md`
+`## Verification commands` — see `docs/agents-md-schema.md`):
 
 - `pytest tests/test_frontmatter.py` passes
 - `note.py` exposes `parse_frontmatter(text) -> dict`
-- README has a usage example under "Front-matter"
 
-The runner runs every check before opening a PR.
+The gate runs the AGENTS.md commands after every commit the runner
+makes and blocks PR-open while any of them fails. Criteria beyond
+the gate's reach (docs wording, UI behavior) are reviewed by the
+human on the PR — keep them few and observable.
 
 ### 6. Out of scope
 
