@@ -16,6 +16,7 @@ See [`0000-template.md`](0000-template.md) for the blank starting point, and CLA
 | [0006](0006-qwen3-6-default-runner-model.md) | `qwen3.6:latest` is the default `RUNNER_MODEL` | Verbose-but-correct beats fast-but-fragile for a default. 3/3 PASS in the bake-off. | Superseded by [ADR-0008](0008-qwen25-coder-default-runner-model.md) | 2026-06-21 |
 | [0007](0007-loop-detection-and-prose-rescue-are-load-bearing.md) | Loop detection and prose-shaped tool-call rescue are load-bearing, not optional | #85 and #84 are production features, not optional. Bake-off was only fair because both were on. | Accepted | 2026-06-20 |
 | [0008](0008-qwen25-coder-default-runner-model.md) | `qwen2.5-coder:32b` at `temperature=0.2` is the default `RUNNER_MODEL` | Re-eval after #98 cleared the collision blocker: 3/3 PASS at 8.67 avg turns. Supersedes ADR-0006. | Accepted | 2026-06-27 |
+| [0009](0009-mechanical-remediation-over-model-effort.md) | Deterministic gate failures are remediated mechanically, never delegated to the model | eval-40: the model oscillated on byte-exact formatting even with the diff in context; formatting has a perfect 0.5s mechanical solver. | Accepted | 2026-07-11 |
 
 ## Status legend
 
