@@ -45,8 +45,8 @@ Anything the runner can't infer from the codebase:
 
 Keep human-facing rationale out of runner-task bodies. "Decisions
 (locked)" style sections belong in the epic or an issue comment; the
-body stays Goal / Context-pointers / Subtasks / Acceptance /
-Out-of-scope. Every word of body is prompt-token cost the model pays
+body stays Goal / Context / Subtasks / Acceptance criteria /
+Out of scope. Every word of body is prompt-token cost the model pays
 on every turn.
 
 ### 4. Subtasks
@@ -64,8 +64,8 @@ A GitHub checklist. Each item must be:
 one of them, split into an epic + children):
 
 - **≤ 5 subtasks**
-- **≤ ~5 files touched**
-- **body ≤ ~500 words**
+- **≤ 5 files touched**
+- **body ≤ 500 words**
 
 The unit of a runner-task issue is **one gate-visible increment**:
 while the issue is incomplete, at least one AGENTS.md verification
@@ -87,12 +87,12 @@ command the verification gate runs (the target repo's `AGENTS.md`
 `## Verification commands` — see `docs/agents-md-schema.md`):
 
 - `pytest tests/test_frontmatter.py` passes
-- `note.py` exposes `parse_frontmatter(text) -> dict`
+- `make check` stays clean
 
 The gate runs the AGENTS.md commands after every commit the runner
 makes and blocks PR-open while any of them fails. Criteria beyond
-the gate's reach (docs wording, UI behavior) are reviewed by the
-human on the PR — keep them few and observable.
+the gate's reach (README wording, an exposed function signature) are
+reviewed by the human on the PR — keep them few and observable.
 
 ### 6. Out of scope
 
