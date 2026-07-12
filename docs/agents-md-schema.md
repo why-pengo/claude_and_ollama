@@ -78,7 +78,8 @@ behavior the runner gate needs.
 
 ### `## Verification commands`
 
-A YAML list of objects. Each object has exactly two string keys:
+A YAML list of objects. Each object has two required string keys
+(`name`, `command`) and one optional string key (`fix`):
 
 | Key | Type | Description |
 |---|---|---|

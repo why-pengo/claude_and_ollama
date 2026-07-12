@@ -192,6 +192,18 @@ class RemediationResult:
     notes: str  # human-readable trail for session.log
 
 
+# Sentinel note for the quiet no-op case (no failed command declared a fix);
+# session.py compares against it to decide whether the outcome is worth logging.
+REMEDIATION_NO_FIXES = "no fixes declared"
+
+
+def _discard_remediation(workspace_dir: Path) -> None:
+    """Throw away a rejected fix's tree changes; raise if the tree can't be trusted."""
+    rc, _, err = _git(["reset", "--hard"], workspace_dir)
+    if rc != 0:
+        raise GateError(f"`git reset --hard` failed after remediation: {err.strip()}")
+
+
 def run_remediation(workspace_dir: Path, gate: GateResult) -> RemediationResult:
     """Run the declared `fix` of every failed command, collect what changed.
 
@@ -216,10 +228,21 @@ def run_remediation(workspace_dir: Path, gate: GateResult) -> RemediationResult:
         if not r.passed and r.fix and r.fix not in fixes:
             fixes.append(r.fix)
     if not fixes:
-        return RemediationResult(fixes_run=[], changed_files={}, notes="no fixes declared")
+        return RemediationResult(fixes_run=[], changed_files={}, notes=REMEDIATION_NO_FIXES)
 
+    ran: list[str] = []
     for fix in fixes:
-        subprocess.run(fix, shell=True, cwd=workspace_dir, capture_output=True, text=True)
+        ran.append(fix)
+        proc = subprocess.run(fix, shell=True, cwd=workspace_dir, capture_output=True, text=True)
+        if proc.returncode != 0:
+            # The fix itself failed — not a deterministic solver after all.
+            # Committing whatever it half-did would be untrustworthy.
+            _discard_remediation(workspace_dir)
+            return RemediationResult(
+                fixes_run=ran,
+                changed_files={},
+                notes=f"skipped: fix `{fix}` exited {proc.returncode} — discarding its changes",
+            )
 
     rc, out, err = _git(["status", "--porcelain", "--untracked-files=no"], workspace_dir)
     if rc != 0:
@@ -236,7 +259,7 @@ def run_remediation(workspace_dir: Path, gate: GateResult) -> RemediationResult:
             other.append(line.strip())
     if other:
         # Not mechanical — discard and let the model hear the failure.
-        _git(["reset", "--hard"], workspace_dir)
+        _discard_remediation(workspace_dir)
         return RemediationResult(
             fixes_run=fixes,
             changed_files={},

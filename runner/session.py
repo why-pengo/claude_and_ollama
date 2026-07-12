@@ -24,6 +24,7 @@ from pathlib import Path
 import httpx
 from agents_md import ParsedAgentsMd, format_agents_summary
 from gate import (
+    REMEDIATION_NO_FIXES,
     GateError,
     GateResult,
     format_gate_block,
@@ -81,7 +82,7 @@ def _gate_with_remediation(
 
     remediation = run_remediation(workspace_dir, gate_result)
     if not remediation.changed_files:
-        if remediation.fixes_run or "no fixes declared" not in remediation.notes:
+        if remediation.notes != REMEDIATION_NO_FIXES:
             print(f"  [gate: remediation] {remediation.notes}")
         return [gate_result]
 

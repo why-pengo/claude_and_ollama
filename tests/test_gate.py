@@ -526,6 +526,22 @@ class TestRunRemediation:
         assert rem.changed_files == {}
         assert "detector" in rem.notes
 
+    def test_failing_fix_discarded_and_reset(self, rig):
+        # The fix mutates the tree but exits non-zero: whatever it half-did
+        # is untrustworthy and must not become a remediation commit.
+        cmds = [
+            VerificationCommand(
+                name="check", command="false", fix="echo partial > feature.txt; exit 3"
+            )
+        ]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        rem = run_remediation(rig["workspace"], gate)
+        assert rem.fixes_run == ["echo partial > feature.txt; exit 3"]
+        assert rem.changed_files == {}
+        assert "exited 3" in rem.notes
+        # The partial mutation was rolled back.
+        assert (rig["workspace"] / "feature.txt").read_text() == "v1"
+
     def test_destructive_fix_discarded_and_reset(self, rig):
         cmds = [VerificationCommand(name="check", command="false", fix="rm feature.txt")]
         gate = run_gate(rig["workspace"], BRANCH, cmds)
