@@ -55,3 +55,6 @@ vs. relaxing format checks out of the gate.
 ## Next time
 - Decide the formatting-remediation design; file and implement.
 - #152: four consecutive 100% prose-rescue runs.
+- Make `check-only` run-all at the make level (isort's failure currently
+  aborts the target before black/flake8 report), mirroring the gate's own
+  run-all philosophy so one commit yields the complete check picture.

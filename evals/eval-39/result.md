@@ -30,7 +30,8 @@ isort's expected ordering from a bare error line.
 
 Fix: `--diff` on the check-mode tools (`isort --check-only --diff`,
 `black --check --diff`) so the failure output *shows the expected form* —
-filed as health_track#105. eval-40 re-runs after it lands.
+filed as health_track#105, implemented by health_track PR #106.
+eval-40 re-runs after it lands.
 
 ## Observations
 
@@ -44,10 +45,11 @@ Verdict: FAIL
 Run-level FAIL (loop-detect + salvage). Harness-level: every mechanism
 including the new #154 detectors behaved to spec; the failure isolates to
 feedback quality — the gate must relay *actionable* failure output, which
-is a target-repo command-flag concern (health_track#105).
+is a target-repo command-flag concern (issue health_track#105, fixed by
+PR health_track#106).
 
 ## Next time
-- health_track#105: --diff flags on check-only, then eval-40.
+- health_track#105 (fixed by PR #106): --diff flags on check-only, then eval-40.
 - #152 (prose-rescue investigation) now has three consecutive 100% runs.
 - Consider a runner-side guard for identical-recommit cycles that burns
   fewer turns (loop-detect took 4 cycles × ~37s of gate time) — only if
