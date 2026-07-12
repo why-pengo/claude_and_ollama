@@ -20,6 +20,7 @@ from gate import (
     format_pr_block_error,
     format_salvage_verification,
     run_gate,
+    run_remediation,
 )
 
 from tools import TOOL_RESULT_SIZE_CAP
@@ -476,3 +477,60 @@ class TestRunGateHeadMoveDetector:
         gate = run_gate(rig["workspace"], BRANCH, cmds)
         assert gate.aggregate_status == "fail"
         assert gate.results[-1].name == "head-moved"
+
+
+class TestRunRemediation:
+    """ADR-0009 / #157: declared fixes run mechanically after a red gate."""
+
+    def _red_gate_with_fix(self, rig):
+        cmds = [
+            VerificationCommand(
+                name="check",
+                command="grep -q formatted feature.txt",
+                fix="echo formatted > feature.txt",
+            )
+        ]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        assert gate.aggregate_status == "fail"  # v1 content isn't "formatted"
+        return gate
+
+    def test_fix_collects_changed_files(self, rig):
+        gate = self._red_gate_with_fix(rig)
+        rem = run_remediation(rig["workspace"], gate)
+        assert rem.fixes_run == ["echo formatted > feature.txt"]
+        assert rem.changed_files == {"feature.txt": "formatted\n"}
+        assert "1 file(s) changed" in rem.notes
+
+    def test_no_fixes_declared_is_a_noop(self, rig):
+        cmds = [VerificationCommand(name="check", command="false")]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        rem = run_remediation(rig["workspace"], gate)
+        assert rem.fixes_run == []
+        assert rem.changed_files == {}
+
+    def test_fix_changing_nothing_reports_it(self, rig):
+        cmds = [VerificationCommand(name="check", command="false", fix="true")]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        rem = run_remediation(rig["workspace"], gate)
+        assert rem.fixes_run == ["true"]
+        assert rem.changed_files == {}
+        assert "changed nothing" in rem.notes
+
+    def test_detector_results_disable_remediation(self, rig):
+        # A command that mutates (no fix declared elsewhere matters): the
+        # gate carries workspace-mutation, so remediation must refuse.
+        cmds = [VerificationCommand(name="mutating", command="echo dirt > feature.txt", fix="true")]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        assert any(r.name == "workspace-mutation" for r in gate.results)
+        rem = run_remediation(rig["workspace"], gate)
+        assert rem.changed_files == {}
+        assert "detector" in rem.notes
+
+    def test_destructive_fix_discarded_and_reset(self, rig):
+        cmds = [VerificationCommand(name="check", command="false", fix="rm feature.txt")]
+        gate = run_gate(rig["workspace"], BRANCH, cmds)
+        rem = run_remediation(rig["workspace"], gate)
+        assert rem.changed_files == {}
+        assert "non-modification" in rem.notes
+        # The destructive fix was rolled back.
+        assert (rig["workspace"] / "feature.txt").read_text() == "v1"

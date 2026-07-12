@@ -301,3 +301,44 @@ class TestFormatAgentsSummary:
             conventions=["a", "b", "c"],
         )
         assert format_agents_summary(parsed) == "verification=[check, test], 3 conventions"
+
+
+class TestFixKey:
+    """Optional per-command `fix` (ADR-0009 / #157)."""
+
+    def test_fix_round_trips(self):
+        doc = CONFORMING.replace(
+            "- name: check\n  command: make check",
+            "- name: check\n  command: make check-only\n  fix: make format",
+        )
+        parsed = parse_agents_md(doc)
+        by_name = {c.name: c for c in parsed.verification_commands}
+        assert by_name["check"].fix == "make format"
+        assert by_name["test"].fix is None  # absent stays None
+
+    def test_empty_fix_rejected(self):
+        doc = CONFORMING.replace(
+            "- name: check\n  command: make check",
+            '- name: check\n  command: make check\n  fix: ""',
+        )
+        with pytest.raises(AgentsMdError) as excinfo:
+            parse_agents_md(doc)
+        _assert_schema_error(excinfo, "'fix' must be a non-empty string")
+
+    def test_non_string_fix_rejected(self):
+        doc = CONFORMING.replace(
+            "- name: check\n  command: make check",
+            "- name: check\n  command: make check\n  fix: 42",
+        )
+        with pytest.raises(AgentsMdError) as excinfo:
+            parse_agents_md(doc)
+        _assert_schema_error(excinfo, "'fix' must be a non-empty string")
+
+    def test_typo_keys_still_rejected(self):
+        doc = CONFORMING.replace(
+            "- name: check\n  command: make check",
+            "- name: check\n  command: make check\n  fixx: make format",
+        )
+        with pytest.raises(AgentsMdError) as excinfo:
+            parse_agents_md(doc)
+        _assert_schema_error(excinfo, "unexpected key(s)", "fixx")

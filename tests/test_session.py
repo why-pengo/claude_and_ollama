@@ -1105,3 +1105,161 @@ class TestRunSessionPrGatePinning:
         )
         assert rc == 0
         assert len(pr_impl_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# _gate_with_remediation — mechanical remediation orchestration (#157)
+# ---------------------------------------------------------------------------
+
+
+class TestGateWithRemediation:
+    """The gate→fix→API-commit→re-gate cycle, with run_gate/run_remediation
+    faked; the real subprocess/git paths are covered in test_gate.py."""
+
+    def _agents(self):
+        return ParsedAgentsMd(
+            verification_commands=[
+                VerificationCommand(name="check", command="make check-only", fix="make format")
+            ],
+            conventions=[],
+        )
+
+    def _red(self):
+        return GateResult(
+            sha="a" * 40,
+            results=[
+                CommandResult(
+                    name="check",
+                    command="make check-only",
+                    exit_code=1,
+                    stdout="diff here",
+                    stderr="",
+                    elapsed=0.1,
+                    fix="make format",
+                )
+            ],
+            aggregate_status="fail",
+            branch="runner/issue-1-x",
+        )
+
+    def _arm(self, monkeypatch, gate_queue, remediation, push_result="OK"):
+        from gate import RemediationResult
+
+        gates = list(gate_queue)
+        pushes = []
+        monkeypatch.setattr(session, "run_gate", lambda ws, b, c: gates.pop(0))
+        monkeypatch.setattr(
+            session,
+            "run_remediation",
+            lambda ws, g: RemediationResult(
+                fixes_run=remediation[0], changed_files=remediation[1], notes=remediation[2]
+            ),
+        )
+        dispatch = dict(session.DISPATCH)
+        dispatch["github__push_files"] = lambda args: pushes.append(args) or push_result
+        monkeypatch.setattr(session, "DISPATCH", dispatch)
+        return pushes
+
+    def test_red_gate_remediated_and_regated(self, monkeypatch, tmp_path, capsys):
+        pushes = self._arm(
+            monkeypatch,
+            [self._red(), _green_gate()],
+            (["make format"], {"backend/app/x.py": "fixed\n"}, "1 file(s) changed by make format"),
+        )
+        results = session._gate_with_remediation(
+            tmp_path, "runner/issue-1-x", self._agents(), "owner/repo"
+        )
+        assert [r.aggregate_status for r in results] == ["fail", "pass"]
+        assert len(pushes) == 1
+        push = pushes[0]
+        assert push["owner"] == "owner" and push["repo"] == "repo"
+        assert push["branch"] == "runner/issue-1-x"
+        assert push["files"] == [{"path": "backend/app/x.py", "content": "fixed\n"}]
+        assert push["message"] == "style: mechanical remediation by runner (make format)"
+        out = capsys.readouterr().out
+        assert "[gate: remediation]" in out
+        assert "re-running gate once" in out
+
+    def test_fix_changing_nothing_falls_back(self, monkeypatch, tmp_path):
+        pushes = self._arm(
+            monkeypatch, [self._red()], (["make format"], {}, "fix commands changed nothing")
+        )
+        results = session._gate_with_remediation(
+            tmp_path, "runner/issue-1-x", self._agents(), "owner/repo"
+        )
+        assert [r.aggregate_status for r in results] == ["fail"]
+        assert pushes == []
+
+    def test_push_failure_falls_back_to_first_result(self, monkeypatch, tmp_path, capsys):
+        pushes = self._arm(
+            monkeypatch,
+            [self._red()],
+            (["make format"], {"x.py": "fixed\n"}, "1 file(s) changed by make format"),
+            push_result="ERROR: 409 conflict",
+        )
+        results = session._gate_with_remediation(
+            tmp_path, "runner/issue-1-x", self._agents(), "owner/repo"
+        )
+        assert [r.aggregate_status for r in results] == ["fail"]
+        assert len(pushes) == 1
+        assert "commit failed" in capsys.readouterr().out
+
+    def test_green_gate_never_remediates(self, monkeypatch, tmp_path):
+        called = []
+        monkeypatch.setattr(session, "run_gate", lambda ws, b, c: _green_gate())
+        monkeypatch.setattr(session, "run_remediation", lambda ws, g: called.append(1))
+        results = session._gate_with_remediation(
+            tmp_path, "runner/issue-1-x", self._agents(), "owner/repo"
+        )
+        assert [r.aggregate_status for r in results] == ["pass"]
+        assert called == []
+
+    def test_session_records_both_gate_results(self, monkeypatch, tmp_path, capsys):
+        # Through run_session: commit → red gate → remediation → green gate
+        # → PR allowed → rc 0. gate_state carries both entries.
+        from gate import RemediationResult
+
+        gates = [self._red(), _green_gate()]
+        monkeypatch.setattr(session, "run_gate", lambda ws, b, c: gates.pop(0))
+        monkeypatch.setattr(
+            session,
+            "run_remediation",
+            lambda ws, g: RemediationResult(
+                fixes_run=["make format"],
+                changed_files={"x.py": "fixed\n"},
+                notes="1 file(s) changed by make format",
+            ),
+        )
+        dispatch = _ok_dispatch()
+        dispatch["github__push_files"] = lambda args: "OK"
+        scripted = [
+            _tool_call_msg(
+                "github__create_or_update_file",
+                {"branch": "runner/issue-1-20260627-000000", "path": "x.py", "content": "c"},
+            ),
+            _tool_call_msg("github__create_pull_request", {}),
+            _tool_call_msg("github__add_issue_comment", {}),
+        ]
+        monkeypatch.setattr(session, "ollama_chat", _scripted_chat(scripted))
+        monkeypatch.setattr(session, "DISPATCH", dispatch)
+        monkeypatch.setattr(session, "attempt_salvage", lambda *a, **kw: None)
+        rc = run_session(
+            host="http://example",
+            model="m",
+            recipe_path=_minimal_recipe(tmp_path),
+            params={
+                "base_branch": "main",
+                "repo": "owner/repo",
+                "issue_number": "1",
+                "branch": "runner/issue-1-20260627-000000",
+            },
+            max_turns=6,
+            salvage_enabled=False,
+            turn_timeout=10.0,
+            workspace_dir=tmp_path,
+            agents_md=self._agents(),
+        )
+        assert rc == 0  # PR allowed: latest gate green
+        out = capsys.readouterr().out
+        assert out.count("aggregate:") == 2  # both gate blocks printed
+        assert "[runner: gate red — feeding failure back to the model]" not in out

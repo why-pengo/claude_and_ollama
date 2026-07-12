@@ -29,7 +29,7 @@ SCHEMA_SPEC_URL = (
 VERIFICATION_HEADING = "## Verification commands"
 CONVENTIONS_HEADING = "## Conventions"
 
-_COMMAND_KEYS = {"name", "command"}
+_COMMAND_KEYS = {"name", "command", "fix"}
 
 
 class AgentsMdError(Exception):
@@ -44,6 +44,10 @@ def _schema_error(msg: str) -> AgentsMdError:
 class VerificationCommand:
     name: str
     command: str
+    # Optional mechanical remediation (ADR-0009): a command the runner runs
+    # when this check fails, committing any resulting tracked-file changes
+    # itself so the model is never asked to reproduce formatter output.
+    fix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,19 +135,22 @@ def _validate_commands(raw: object) -> list[VerificationCommand]:
             # key=repr: YAML mapping keys can be non-strings, and sorting a
             # mixed-type set raises TypeError — this path must stay AgentsMdError.
             raise _schema_error(
-                f"{where} has unexpected key(s) {sorted(extra, key=repr)} — only 'name' and "
-                f"'command' are allowed (this guards against typos like 'cmd:' "
+                f"{where} has unexpected key(s) {sorted(extra, key=repr)} — only 'name', "
+                f"'command', and 'fix' are allowed (this guards against typos like 'cmd:' "
                 f"silently dropping a command): {entry!r}"
             )
         for key in ("name", "command"):
             value = entry.get(key)
             if not isinstance(value, str) or not value.strip():
                 raise _schema_error(f"{where} needs a non-empty string '{key}': {entry!r}")
+        fix = entry.get("fix")
+        if fix is not None and (not isinstance(fix, str) or not fix.strip()):
+            raise _schema_error(f"{where} 'fix' must be a non-empty string when present: {entry!r}")
         name = entry["name"]
         if name in seen:
             raise _schema_error(f"{where} reuses name '{name}' — names must be unique")
         seen.add(name)
-        commands.append(VerificationCommand(name=name, command=entry["command"]))
+        commands.append(VerificationCommand(name=name, command=entry["command"], fix=fix))
     return commands
 
 

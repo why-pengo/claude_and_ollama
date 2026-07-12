@@ -44,6 +44,9 @@ class CommandResult:
     stdout: str  # _cap-truncated, safe to feed back to the model (#109)
     stderr: str  # _cap-truncated
     elapsed: float
+    # Declared mechanical remediation for this command (ADR-0009), copied
+    # from the AGENTS.md entry. None on synthetic detector results.
+    fix: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -116,6 +119,7 @@ def run_gate(
                 stdout=_cap(proc.stdout),
                 stderr=_cap(proc.stderr),
                 elapsed=time.monotonic() - start,
+                fix=vc.fix,
             )
         )
     # Mutation detector (#154): a command that modifies tracked files makes
@@ -177,6 +181,74 @@ def run_gate(
         )
     aggregate = "pass" if all(r.passed for r in results) else "fail"
     return GateResult(sha=sha, results=results, aggregate_status=aggregate, branch=branch)
+
+
+@dataclass(frozen=True)
+class RemediationResult:
+    """Outcome of running declared fix commands after a red gate (ADR-0009)."""
+
+    fixes_run: list[str]  # unique fix commands executed, in order
+    changed_files: dict[str, str]  # path -> new content, tracked modifications only
+    notes: str  # human-readable trail for session.log
+
+
+def run_remediation(workspace_dir: Path, gate: GateResult) -> RemediationResult:
+    """Run the declared `fix` of every failed command, collect what changed.
+
+    Mechanical only (ADR-0009): the caller commits `changed_files` through
+    the GitHub API path and re-runs the gate exactly once. Fixes never run
+    when the gate carries a synthetic detector result (workspace-mutation /
+    head-moved) — those mean the target's command list is misconfigured and
+    remediation on top of an untrustworthy tree would launder it.
+
+    Only modified tracked files (` M` porcelain status) are collected; a
+    fix that deletes or renames files is not mechanical remediation and
+    falls back to model feedback with a note.
+    """
+    if any(r.name in ("workspace-mutation", "head-moved") for r in gate.results):
+        return RemediationResult(
+            fixes_run=[],
+            changed_files={},
+            notes="skipped: gate carries a detector result — fix the AGENTS.md command list first",
+        )
+    fixes: list[str] = []
+    for r in gate.results:
+        if not r.passed and r.fix and r.fix not in fixes:
+            fixes.append(r.fix)
+    if not fixes:
+        return RemediationResult(fixes_run=[], changed_files={}, notes="no fixes declared")
+
+    for fix in fixes:
+        subprocess.run(fix, shell=True, cwd=workspace_dir, capture_output=True, text=True)
+
+    rc, out, err = _git(["status", "--porcelain", "--untracked-files=no"], workspace_dir)
+    if rc != 0:
+        raise GateError(f"`git status` failed after remediation: {err.strip()}")
+    modified: list[str] = []
+    other: list[str] = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        status, path = line[:2], line[3:].strip()
+        if status.strip() == "M":
+            modified.append(path)
+        else:
+            other.append(line.strip())
+    if other:
+        # Not mechanical — discard and let the model hear the failure.
+        _git(["reset", "--hard"], workspace_dir)
+        return RemediationResult(
+            fixes_run=fixes,
+            changed_files={},
+            notes=f"skipped: fix produced non-modification changes ({', '.join(other)})",
+        )
+    changed = {path: (workspace_dir / path).read_text() for path in modified}
+    notes = (
+        f"{len(changed)} file(s) changed by {', '.join(fixes)}"
+        if changed
+        else "fix commands changed nothing"
+    )
+    return RemediationResult(fixes_run=fixes, changed_files=changed, notes=notes)
 
 
 # Closing hint of the failure-feed-back message (locked decision on #109):
